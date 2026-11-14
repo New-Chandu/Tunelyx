@@ -40,7 +40,7 @@ A native Android music discovery app built with Jetpack Compose and Media3. Tune
 
 ```bash
 # Clone
-git clone https://github.com/<your-username>/tunelyx.git
+git clone https://github.com/new-chandu/tunelyx.git
 cd tunelyx
 
 # Run unit tests
