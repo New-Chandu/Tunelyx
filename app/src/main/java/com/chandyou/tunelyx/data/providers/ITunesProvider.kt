@@ -8,6 +8,31 @@ import com.chandyou.tunelyx.model.splitArtistNames
 import kotlinx.coroutines.sync.Mutex
 import java.net.URLEncoder
 
+/**
+ * Dedicated Apple iTunes Search API provider handler.
+ *
+ * Real response payload reference schema (queried from https://itunes.apple.com/search):
+ * ```json
+ * {
+ *   "wrapperType": "track",
+ *   "kind": "song",
+ *   "artistId": 484568188,
+ *   "collectionId": 1653219847,
+ *   "trackId": 1653219849,
+ *   "artistName": "Arijit Singh, Sachin-Jigar & Amitabh Bhattacharya",
+ *   "collectionName": "Apna Bana Le (From \"Bhediya\") - Single",
+ *   "trackName": "Apna Bana Le (From \"Bhediya\")",
+ *   "previewUrl": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/eb/27/61/eb2761c7-d606-0912-dff0-2dc6b69974bd/mzaf_2023722930851223219.plus.aac.p.m4a",
+ *   "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/Music122/v4/2e/0b/c0/2e0bc070-112f-a827-6ad8-6bc64f7caaff/840214460180.png/100x100bb.jpg",
+ *   "releaseDate": "2022-11-05T12:00:00Z",
+ *   "trackTimeMillis": 261702,
+ *   "country": "IND",
+ *   "currency": "INR",
+ *   "primaryGenreName": "Bollywood",
+ *   "isStreamable": true
+ * }
+ * ```
+ */
 object ITunesProvider : MusicProviderClient {
 
     override val provider: MusicProvider = MusicProvider.ITUNES

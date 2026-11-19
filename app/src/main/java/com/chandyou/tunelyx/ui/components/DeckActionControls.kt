@@ -35,6 +35,13 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.Icon
+import com.chandyou.tunelyx.ui.animations.CinematicSkipButton
+import com.chandyou.tunelyx.ui.animations.ConstructBookmarkButton
+import com.chandyou.tunelyx.ui.animations.ElasticLikeButton
+import com.chandyou.tunelyx.ui.animations.FluidDislikeButton
+import com.chandyou.tunelyx.ui.animations.MorphPlayPauseButton
+import com.chandyou.tunelyx.ui.animations.MusicInteractionPalette
+import com.chandyou.tunelyx.ui.animations.RewindUndoButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -81,9 +88,10 @@ fun DeckActionControls(
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
             .shadow(
-                elevation = if (colors.isDark) 0.dp else 6.dp,
+                elevation = if (colors.isDark) 18.dp else 10.dp,
                 shape = CircleShape,
-                spotColor = Color(0x24000000)
+                ambientColor = if (colors.isDark) Color(0xA0000000) else Color(0x22000000),
+                spotColor = if (colors.isDark) Color(0xFF000000) else Color(0x38000000)
             )
             .clip(CircleShape)
             .background(colors.bgGlass)
@@ -158,101 +166,76 @@ fun DiscoveryActionButtonRow(
             .graphicsLayer { alpha = outerButtonsAlpha }
         val outerEnabled = outerButtonsAlpha > 0.5f
 
-        // 0. Undo Button (Far Left) with Full 360 Spin on Icon
-        val undoInteractionSource = remember { MutableInteractionSource() }
-        val isUndoPressed by undoInteractionSource.collectIsPressedAsState()
-        var undoSpinCount by remember { mutableIntStateOf(0) }
-        val undoScale by animateFloatAsState(
-            targetValue = if (isUndoPressed) 0.88f else 1.0f,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
-            label = "undoScale"
-        )
-        val undoRotation by animateFloatAsState(
-            targetValue = (undoSpinCount * -360f) + (if (isUndoPressed) -20f else 0f),
-            animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
-            label = "undoIconRotation"
-        )
-        Box(
+        // 0. Undo Button (Far Left) with Rewind Arc & Arrow Reveal
+        RewindUndoButton(
+            onUndo = {
+                if (isHapticEnabled) {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                }
+                onActionUndo()
+            },
+            enabled = canUndo && outerEnabled,
+            touchSize = undoButtonSizeDp.dp,
+            iconSize = (undoButtonSizeDp * 0.52f).dp,
+            palette = MusicInteractionPalette(
+                active = neutralIconTint ?: colors.textPrimary,
+                inactive = resolvedNeutralIcon.copy(alpha = 0.35f),
+                ripple = colors.accentGreenGlow
+            ),
             modifier = outerModifier
-                .scale(undoScale)
-                .size(undoButtonSizeDp.dp)
                 .clip(CircleShape)
-                .background(
-                    if (canUndo) {
-                        neutralButtonBg ?: Color(0x1AFFFFFF)
-                    } else {
-                        Color.Transparent
-                    }
-                )
+                .background(if (canUndo) (neutralButtonBg ?: Color(0x1AFFFFFF)) else Color.Transparent)
                 .let { mod ->
                     if (canUndo && neutralButtonBorder != null) {
                         mod.border(0.8.dp, neutralButtonBorder, CircleShape)
-                    } else {
-                        mod
-                    }
+                    } else mod
                 }
-                .clickable(
-                    enabled = canUndo && outerEnabled,
-                    interactionSource = undoInteractionSource,
-                    indication = null,
-                    onClick = {
-                        if (isHapticEnabled) {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                        }
-                        undoSpinCount++
-                        onActionUndo()
-                    }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Rounded.Undo,
-                contentDescription = "Undo",
-                tint = if (canUndo) (neutralIconTint ?: colors.textPrimary) else resolvedNeutralIcon.copy(alpha = 0.35f),
-                modifier = Modifier
-                    .size(18.dp)
-                    .rotate(undoRotation)
-            )
-        }
+        )
 
-        // 1. Bookmark / Add to Collection (Elastic Drop & Scale on Icon)
+        // 1. Bookmark / Add to Collection (Constructing Liquid Wave & Sparkles)
         val isBookmarkActive = activeDragDirection == SwipeDirection.BOOKMARK_INAPP
         val bookmarkScale by animateFloatAsState(
             targetValue = if (isBookmarkActive) 1f + 0.18f * dragIntensity else 1.0f,
             animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
             label = "bookmarkScale"
         )
-        ActionButton(
-            icon = bookmarkIcon,
-            contentDescription = "Bookmark",
-            scale = bookmarkScale,
-            sizeDp = secondaryButtonSizeDp,
-            isDragActive = isBookmarkActive,
-            dragIntensity = dragIntensity,
-            activeIconScale = 1.24f,
-            activeIconOffsetY = 3f,
-            tint = if (isBookmarkActive) colors.bookmarkPurple else resolvedNeutralIcon,
-            glowColor = if (isBookmarkActive) colors.bookmarkPurpleGlow else Color.Transparent,
-            neutralBg = neutralButtonBg,
-            neutralBorder = neutralButtonBorder,
-            enabled = outerEnabled,
-            modifier = outerModifier,
-            onClick = {
+        ConstructBookmarkButton(
+            isSaved = isBookmarkActive,
+            onToggle = {
                 if (isHapticEnabled) {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
                 onActionBookmark()
-            }
+            },
+            enabled = outerEnabled,
+            touchSize = secondaryButtonSizeDp.dp,
+            iconSize = (secondaryButtonSizeDp * 0.55f).dp,
+            palette = MusicInteractionPalette(
+                active = colors.bookmarkPurple,
+                inactive = resolvedNeutralIcon,
+                ripple = colors.bookmarkPurpleGlow,
+                sparkle = colors.bookmarkPurple
+            ),
+            modifier = outerModifier
+                .scale(bookmarkScale)
+                .shadow(
+                    elevation = if (isBookmarkActive) 8.dp else (if (colors.isDark) 6.dp else 4.dp),
+                    shape = CircleShape,
+                    spotColor = if (isBookmarkActive) colors.bookmarkPurpleGlow else Color(0x20000000)
+                )
+                .clip(CircleShape)
+                .background(if (isBookmarkActive) colors.bookmarkPurple.copy(alpha = 0.22f) else (neutralButtonBg ?: Color(0x1AFFFFFF)))
+                .border(
+                    width = 1.dp,
+                    color = if (isBookmarkActive) colors.bookmarkPurple else (neutralButtonBorder ?: colors.borderSubtle),
+                    shape = CircleShape
+                )
         )
 
-        // 2. Like / Resume (Center Prominent with Dynamic Double-Pulse Heartbeat & Tilt on Icon)
+        // 2. Like / Resume (Center Prominent with Elastic Heart & Particle Sparkles / Morph Play-Pause)
         if (showCenterButton) {
             val isLikeActive = activeDragDirection == SwipeDirection.LIKE
-            var isHeartBeating by remember { mutableStateOf(false) }
-
-            // Dynamic color sync with track gradient
             val dynamicTrackColor = currentTrack?.glowColor ?: colors.accentGreen
-            val dynamicTrackContent = colors.onAccent
 
             val resolvedLikeBg by animateColorAsState(
                 targetValue = if (isLikeActive) {
@@ -266,172 +249,143 @@ fun DiscoveryActionButtonRow(
                 label = "likeBg"
             )
 
-            val resolvedLikeContent by animateColorAsState(
-                targetValue = if (!isPlaying && currentTrack != null) {
-                    colors.textPrimary
-                } else {
-                    likeContentTint ?: dynamicTrackContent
-                },
-                animationSpec = tween(180),
-                label = "likeContent"
-            )
-
             val likeScale by animateFloatAsState(
                 targetValue = if (isLikeActive) 1f + 0.22f * dragIntensity else 1.0f,
                 animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
                 label = "likeScale"
             )
 
-            val likeInteractionSource = remember { MutableInteractionSource() }
-            val isLikePressed by likeInteractionSource.collectIsPressedAsState()
-            val likePressScale by animateFloatAsState(
-                targetValue = if (isLikePressed) 0.88f else 1.0f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
-                label = "likePressScale"
-            )
-
-            val heartBeatPulse = remember { Animatable(1f) }
-            val heartTilt = remember { Animatable(0f) }
-
-            val heartScale by animateFloatAsState(
-                targetValue = if (isLikeActive || isLikePressed || isHeartBeating) 1.28f else 1.0f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-                label = "heartScale"
-            )
-
             Box(
                 modifier = Modifier
-                    .scale(likeScale * likePressScale),
+                    .scale(likeScale)
+                    .size(centerButtonSizeDp.dp)
+                    .shadow(
+                        elevation = if (isLikeActive) 8.dp else 4.dp,
+                        shape = CircleShape,
+                        spotColor = colors.accentGreenGlow
+                    )
+                    .clip(CircleShape)
+                    .background(resolvedLikeBg),
                 contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(centerButtonSizeDp.dp)
-                        .shadow(
-                            elevation = if (isLikeActive) 8.dp else 4.dp,
-                            shape = CircleShape,
-                            spotColor = colors.accentGreenGlow
-                        )
-                        .clip(CircleShape)
-                        .background(resolvedLikeBg)
-                        .clickable(
-                            interactionSource = likeInteractionSource,
-                            indication = null,
-                            onClick = {
-                                if (isPlaying || currentTrack == null) {
-                                    if (currentTrack != null) {
-                                        if (isHapticEnabled) {
-                                            view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                                        }
-                                        scope.launch {
-                                            isHeartBeating = true
-                                            // Tactile double heartbeat pulse with playful tilt on the heart icon
-                                            launch {
-                                                heartTilt.animateTo(-8f, tween(70))
-                                                heartTilt.animateTo(8f, tween(90))
-                                                heartTilt.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                                            }
-                                            heartBeatPulse.animateTo(1.35f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh))
-                                            heartBeatPulse.animateTo(1.08f, tween(70))
-                                            heartBeatPulse.animateTo(1.24f, tween(80))
-                                            heartBeatPulse.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                                            isHeartBeating = false
-                                            onActionLike()
-                                        }
-                                    }
-                                } else {
-                                    if (isHapticEnabled) {
-                                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                                    }
-                                    onResumeAudio()
+                if (isPlaying || currentTrack == null) {
+                    ElasticLikeButton(
+                        isLiked = isLikeActive,
+                        onToggle = {
+                            if (currentTrack != null) {
+                                if (isHapticEnabled) {
+                                    view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                                 }
+                                onActionLike()
                             }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AnimatedContent(
-                        targetState = isPlaying,
-                        transitionSpec = {
-                            (fadeIn(tween(150)) + scaleIn(initialScale = 0.72f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)))
-                                .togetherWith(fadeOut(tween(110)) + scaleOut(targetScale = 0.72f))
                         },
-                        label = "centerIconMorph"
-                    ) { playing ->
-                        Icon(
-                            imageVector = if (playing) Icons.Rounded.Favorite else Icons.Rounded.PlayArrow,
-                            contentDescription = if (playing) "Like Track" else "Resume Track",
-                            tint = resolvedLikeContent,
-                            modifier = Modifier
-                                .size(23.dp)
-                                .scale(heartScale * heartBeatPulse.value)
-                                .rotate(heartTilt.value)
+                        touchSize = centerButtonSizeDp.dp,
+                        iconSize = (centerButtonSizeDp * 0.52f).dp,
+                        palette = MusicInteractionPalette(
+                            active = colors.onAccent,
+                            inactive = colors.onAccent,
+                            ripple = colors.accentGreenGlow,
+                            sparkle = Color.White
                         )
-                    }
+                    )
+                } else {
+                    MorphPlayPauseButton(
+                        isPlaying = false,
+                        onToggle = {
+                            if (isHapticEnabled) {
+                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            }
+                            onResumeAudio()
+                        },
+                        touchSize = centerButtonSizeDp.dp,
+                        iconSize = (centerButtonSizeDp * 0.52f).dp,
+                        palette = MusicInteractionPalette(
+                            active = colors.textPrimary,
+                            inactive = colors.textPrimary,
+                            ripple = colors.accentGreenGlow
+                        )
+                    )
                 }
             }
         } else {
             Spacer(modifier = Modifier.size(centerButtonSizeDp.dp))
         }
 
-        // 3. Dislike (Snappy Shake & Tilt on Icon)
+        // 3. Dislike (Fluid Compression Squish & Tilt)
         val isDislikeActive = activeDragDirection == SwipeDirection.DISLIKE
         val dislikeScale by animateFloatAsState(
             targetValue = if (isDislikeActive) 1f + 0.18f * dragIntensity else 1.0f,
             animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
             label = "dislikeScale"
         )
-        ActionButton(
-            icon = Icons.Rounded.Close,
-            contentDescription = "Dislike",
-            scale = dislikeScale,
-            sizeDp = secondaryButtonSizeDp,
-            isDragActive = isDislikeActive,
-            dragIntensity = dragIntensity,
-            activeIconScale = 1.22f,
-            activeIconRotation = -24f,
-            activeIconOffsetX = -2f,
-            tint = if (isDislikeActive) colors.dislikeRed else resolvedNeutralIcon,
-            glowColor = if (isDislikeActive) colors.dislikeRedGlow else Color.Transparent,
-            neutralBg = neutralButtonBg,
-            neutralBorder = neutralButtonBorder,
-            enabled = outerEnabled,
-            modifier = outerModifier,
-            onClick = {
+        FluidDislikeButton(
+            isDisliked = isDislikeActive,
+            onToggle = {
                 if (isHapticEnabled) {
                     view.performHapticFeedback(HapticFeedbackConstants.REJECT)
                 }
                 onActionDislike()
-            }
+            },
+            enabled = outerEnabled,
+            touchSize = secondaryButtonSizeDp.dp,
+            iconSize = (secondaryButtonSizeDp * 0.55f).dp,
+            palette = MusicInteractionPalette(
+                active = colors.dislikeRed,
+                inactive = resolvedNeutralIcon,
+                ripple = colors.dislikeRedGlow
+            ),
+            modifier = outerModifier
+                .scale(dislikeScale)
+                .shadow(
+                    elevation = if (isDislikeActive) 8.dp else (if (colors.isDark) 6.dp else 4.dp),
+                    shape = CircleShape,
+                    spotColor = if (isDislikeActive) colors.dislikeRedGlow else Color(0x20000000)
+                )
+                .clip(CircleShape)
+                .background(if (isDislikeActive) colors.dislikeRed.copy(alpha = 0.22f) else (neutralButtonBg ?: Color(0x1AFFFFFF)))
+                .border(
+                    width = 1.dp,
+                    color = if (isDislikeActive) colors.dislikeRed else (neutralButtonBorder ?: colors.borderSubtle),
+                    shape = CircleShape
+                )
         )
 
-        // 4. Skip (Forward Slide Nudge on Icon)
+        // 4. Skip (Cinematic Directional Impulse & Echo Wave)
         val isSkipActive = activeDragDirection == SwipeDirection.SKIP_NEUTRAL
         val skipScale by animateFloatAsState(
             targetValue = if (isSkipActive) 1f + 0.18f * dragIntensity else 1.0f,
             animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
             label = "skipScale"
         )
-        ActionButton(
-            icon = Icons.Rounded.SkipNext,
-            contentDescription = "Skip",
-            scale = skipScale,
-            sizeDp = secondaryButtonSizeDp,
-            isDragActive = isSkipActive,
-            dragIntensity = dragIntensity,
-            activeIconScale = 1.22f,
-            activeIconOffsetX = 4f,
-            tint = if (isSkipActive) colors.skipAmber else resolvedNeutralIcon,
-            glowColor = if (isSkipActive) colors.skipAmberGlow else Color.Transparent,
-            neutralBg = neutralButtonBg,
-            neutralBorder = neutralButtonBorder,
-            enabled = outerEnabled,
-            modifier = outerModifier,
-            onClick = {
+        CinematicSkipButton(
+            onSkip = {
                 if (isHapticEnabled) {
                     view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 }
                 onActionSkip()
-            }
+            },
+            enabled = outerEnabled,
+            touchSize = secondaryButtonSizeDp.dp,
+            iconSize = (secondaryButtonSizeDp * 0.55f).dp,
+            palette = MusicInteractionPalette(
+                active = if (isSkipActive) colors.skipAmber else resolvedNeutralIcon,
+                inactive = resolvedNeutralIcon,
+                ripple = colors.skipAmberGlow
+            ),
+            modifier = outerModifier
+                .scale(skipScale)
+                .shadow(
+                    elevation = if (isSkipActive) 8.dp else (if (colors.isDark) 6.dp else 4.dp),
+                    shape = CircleShape,
+                    spotColor = if (isSkipActive) colors.skipAmberGlow else Color(0x20000000)
+                )
+                .clip(CircleShape)
+                .background(if (isSkipActive) colors.skipAmber.copy(alpha = 0.22f) else (neutralButtonBg ?: Color(0x1AFFFFFF)))
+                .border(
+                    width = 1.dp,
+                    color = if (isSkipActive) colors.skipAmber else (neutralButtonBorder ?: colors.borderSubtle),
+                    shape = CircleShape
+                )
         )
     }
 }

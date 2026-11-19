@@ -59,7 +59,8 @@ import com.chandyou.tunelyx.ui.theme.TunelyxTheme
 import com.chandyou.tunelyx.viewmodel.DiscoverViewModel
 import com.chandyou.tunelyx.viewmodel.UpdateCheckState
 
-private const val PLACEHOLDER_UPDATER_URL = "https://github.com/tunelyx/tunelyx/releases/latest"
+private const val GITHUB_REPO_URL = "https://github.com/new-chandu/tunelyx"
+private const val GITHUB_RELEASES_URL = "https://github.com/new-chandu/tunelyx/releases/latest"
 
 @Composable
 fun AboutScreen(
@@ -122,21 +123,21 @@ fun AboutScreen(
         ) {
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(68.dp)
                     .clip(CircleShape)
-                    .background(colors.accentGreenGlow)
-                    .border(2.dp, colors.accentGreen, CircleShape),
+                    .background(Color.White)
+                    .border(2.dp, Color.White, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_tunelyx_logo),
                     contentDescription = "Tunelyx Logo",
-                    tint = colors.accentGreen,
-                    modifier = Modifier.size(44.dp)
+                    tint = Color(0xFF0F172A),
+                    modifier = Modifier.size(40.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Text(
                 text = "Tunelyx",
@@ -148,7 +149,7 @@ fun AboutScreen(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "v1.0.0 • Build 50",
+                text = "v1.0.0",
                 fontSize = 13.sp,
                 color = colors.textSecondary
             )
@@ -281,7 +282,7 @@ fun AboutScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Placeholder Updater Link Row
+            // GitHub Repository Link
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -290,7 +291,7 @@ fun AboutScreen(
                     .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
                     .clickable {
                         try {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PLACEHOLDER_UPDATER_URL))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPO_URL))
                             context.startActivity(intent)
                         } catch (_: Exception) {}
                     }
@@ -299,14 +300,47 @@ fun AboutScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Release Channel",
+                    text = "GitHub Repository",
                     fontSize = 13.sp,
                     color = colors.textPrimary,
                     fontWeight = FontWeight.Medium
                 )
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                    contentDescription = "Open Updater Link",
+                    contentDescription = "Open GitHub Repo",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Releases & Updates Link
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(colors.bgSurfaceElevated)
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                    .clickable {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_RELEASES_URL))
+                            context.startActivity(intent)
+                        } catch (_: Exception) {}
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Releases & Updates",
+                    fontSize = 13.sp,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Medium
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                    contentDescription = "Open Releases",
                     tint = colors.textSecondary,
                     modifier = Modifier.size(16.dp)
                 )

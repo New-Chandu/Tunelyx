@@ -44,6 +44,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chandyou.tunelyx.ui.animations.DiscoverTabButton
+import com.chandyou.tunelyx.ui.animations.LibraryTabButton
+import com.chandyou.tunelyx.ui.animations.MusicInteractionPalette
+import com.chandyou.tunelyx.ui.animations.YouTabButton
 import com.chandyou.tunelyx.ui.theme.TunelyxTheme
 
 enum class MainTab {
@@ -59,9 +63,12 @@ enum class MainTab {
 fun FloatingBottomNav(
     currentTab: MainTab,
     onTabSelected: (MainTab) -> Unit,
+    showLabels: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val colors = TunelyxTheme.colors
+    val navIconSize = if (showLabels) 23.dp else 25.dp
+    val navTouchSize = if (showLabels) 25.dp else 30.dp
 
     Row(
         modifier = modifier
@@ -96,11 +103,12 @@ fun FloatingBottomNav(
                 modifier = Modifier
                     .scale(homeScale * homePressScale)
                     .height(50.dp)
-                    .width(78.dp)
+                    .width(if (showLabels) 78.dp else 64.dp)
                     .shadow(
-                        elevation = if (colors.isDark) 0.dp else 6.dp,
+                        elevation = if (colors.isDark) 18.dp else 10.dp,
                         shape = CircleShape,
-                        spotColor = Color(0x20000000)
+                        ambientColor = if (colors.isDark) Color(0xA0000000) else Color(0x22000000),
+                        spotColor = if (colors.isDark) Color(0xFF000000) else Color(0x38000000)
                     )
                     .clip(CircleShape)
                     .background(if (isHomeActive) colors.accentGreenGlow else colors.bgGlass)
@@ -119,18 +127,26 @@ fun FloatingBottomNav(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.GraphicEq,
-                        contentDescription = "Discover",
-                        tint = if (isHomeActive) colors.accentGreen else colors.textSecondary,
-                        modifier = Modifier.size(20.dp)
+                    DiscoverTabButton(
+                        selected = isHomeActive,
+                        onClick = { onTabSelected(MainTab.DISCOVER) },
+                        touchSize = navTouchSize,
+                        iconSize = navIconSize,
+                        palette = MusicInteractionPalette(
+                            active = colors.accentGreen,
+                            inactive = colors.textSecondary,
+                            ripple = colors.accentGreenGlow,
+                            sparkle = colors.accentGreen
+                        )
                     )
-                    Text(
-                        text = "Discover",
-                        fontSize = 10.sp,
-                        fontWeight = if (isHomeActive) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isHomeActive) colors.accentGreen else colors.textSecondary
-                    )
+                    if (showLabels) {
+                        Text(
+                            text = "Discover",
+                            fontSize = 10.sp,
+                            fontWeight = if (isHomeActive) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isHomeActive) colors.accentGreen else colors.textSecondary
+                        )
+                    }
                 }
             }
 
@@ -142,9 +158,10 @@ fun FloatingBottomNav(
                     .height(50.dp)
                     .weight(1f)
                     .shadow(
-                        elevation = if (colors.isDark) 0.dp else 6.dp,
+                        elevation = if (colors.isDark) 18.dp else 10.dp,
                         shape = CircleShape,
-                        spotColor = Color(0x20000000)
+                        ambientColor = if (colors.isDark) Color(0xA0000000) else Color(0x22000000),
+                        spotColor = if (colors.isDark) Color(0xFF000000) else Color(0x38000000)
                     )
                     .clip(CircleShape)
                     .background(colors.bgGlass)
@@ -190,15 +207,17 @@ fun FloatingBottomNav(
                 Row(modifier = Modifier.fillMaxSize()) {
                     NavGroupItem(
                         label = "Library",
-                        icon = Icons.AutoMirrored.Filled.QueueMusic,
+                        tab = MainTab.LIBRARY,
                         isActive = currentTab == MainTab.LIBRARY,
+                        showLabels = showLabels,
                         modifier = Modifier.weight(1f),
                         onClick = { onTabSelected(MainTab.LIBRARY) }
                     )
                     NavGroupItem(
                         label = "You",
-                        icon = Icons.Default.Person,
+                        tab = MainTab.YOU,
                         isActive = currentTab == MainTab.YOU,
+                        showLabels = showLabels,
                         modifier = Modifier.weight(1f),
                         onClick = { onTabSelected(MainTab.YOU) }
                     )
@@ -211,30 +230,22 @@ fun FloatingBottomNav(
 @Composable
 private fun NavGroupItem(
     label: String,
-    icon: ImageVector,
+    tab: MainTab,
     isActive: Boolean,
+    showLabels: Boolean = true,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val colors = TunelyxTheme.colors
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.88f else 1.0f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
-        label = "navGroupPressScale"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (isActive) 1.08f else 1.0f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "tabItemScale"
-    )
+    val navIconSize = if (showLabels) 23.dp else 25.dp
+    val navTouchSize = if (showLabels) 25.dp else 30.dp
 
     Box(
         modifier = modifier
             .fillMaxHeight()
+            .clip(CircleShape)
             .clickable(
-                interactionSource = interactionSource,
+                interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick
             ),
@@ -242,21 +253,46 @@ private fun NavGroupItem(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.scale(scale * pressScale)
+            verticalArrangement = Arrangement.Center
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (isActive) colors.accentGreen else colors.textSecondary,
-                modifier = Modifier.size(20.dp)
-            )
-            Text(
-                text = label,
-                fontSize = 10.sp,
-                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                color = if (isActive) colors.accentGreen else colors.textSecondary
-            )
+            when (tab) {
+                MainTab.LIBRARY -> {
+                    LibraryTabButton(
+                        selected = isActive,
+                        onClick = onClick,
+                        touchSize = navTouchSize,
+                        iconSize = navIconSize,
+                        palette = MusicInteractionPalette(
+                            active = colors.accentGreen,
+                            inactive = colors.textSecondary,
+                            ripple = colors.accentGreenGlow
+                        )
+                    )
+                }
+                MainTab.YOU -> {
+                    YouTabButton(
+                        selected = isActive,
+                        onClick = onClick,
+                        touchSize = navTouchSize,
+                        iconSize = navIconSize,
+                        palette = MusicInteractionPalette(
+                            active = colors.accentGreen,
+                            inactive = colors.textSecondary,
+                            ripple = colors.accentGreenGlow,
+                            sparkle = colors.accentGreen
+                        )
+                    )
+                }
+                else -> {}
+            }
+            if (showLabels) {
+                Text(
+                    text = label,
+                    fontSize = 10.sp,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isActive) colors.accentGreen else colors.textSecondary
+                )
+            }
         }
     }
 }

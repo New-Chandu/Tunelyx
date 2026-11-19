@@ -283,6 +283,26 @@ object ProviderHttpClient {
 
 object ProviderNormalizer {
 
+    val SAD_OR_SLOW_KEYWORDS = listOf(
+        "sad", "dard", "judai", "judaai", "breakup", "alone", "cry", "crying", "rona",
+        "emotional", "tadap", "tanhai", "slow", "unplugged", "acoustic", "alvida",
+        "gam", "gham", "dukh", "heartbreak", "heartbroken", "broken", "bichhad",
+        "tears", "pain", "virah", "maahi ve", "channa mereya", "thodi der",
+        "agar tum saath ho", "tujhe bhula diya", "kabira", "bekhayali", "phir le aya",
+        "khairiyat", "humsafar", "humdard", "ae dil hai mushkil", "tujhe kitna chahne",
+        "lut gaye", "wafa", "bewafa", "judaiyaan", "tanha", "maula", "dua", "duaa",
+        "bhula dena", "lofi", "lo-fi", "chill", "relax", "lullaby", "sleep"
+    )
+
+    private val WESTERN_ARTIST_TOKENS = listOf(
+        "taylor swift", "drake", "ariana grande", "ed sheeran", "the weeknd", "justin bieber",
+        "billie eilish", "dua lipa", "post malone", "bruno mars", "selena gomez", "shawn mendes",
+        "coldplay", "maroon 5", "imagine dragons", "chainsmokers", "rihanna", "beyonce",
+        "eminem", "kanye", "travis scott", "kendrick", "cardi b", "charlie puth", "adele",
+        "sam smith", "calvin harris", "david guetta", "marshmello", "martin garrix", "alan walker",
+        "bebe rexha", "camila cabello", "olivia rodrigo", "sabrina carpenter", "chappell roan"
+    )
+
     private val FOREIGN_NON_INDIAN_GENRES = listOf(
         "k-pop", "j-pop", "anime", "country", "reggaeton", "musica mexicana",
         "french pop", "latin", "sertanejo", "enka", "afrobeats", "mandopop", "cantopop"
@@ -324,26 +344,36 @@ object ProviderNormalizer {
         if (requestedGenre != null) return requestedGenre
 
         val combined = "$title $artist $album $extraMeta".lowercase()
+        val hasSadTone = SAD_OR_SLOW_KEYWORDS.any { combined.contains(it) }
+
         return when {
             listOf("hip hop", "hip-hop", "rap", "divine", "emiway", "seedhe maut", "raftaar", "badshah", "krsna", "mc stan", "gully", "cypher", "freestyle")
                 .any { combined.contains(it) } -> Genre.HIPHOP
             listOf("punjabi", "diljit", "karan aujla", "sidhu moose", "ap dhillon", "shubh", "gurdas", "bhangra", "jatt")
                 .any { combined.contains(it) } -> Genre.PUNJABI
-            listOf("unplugged", "acoustic", "sufi", "lofi", "lo-fi", "stripped", "piano", "qawwali", "ghazal", "peaceful")
+            hasSadTone || listOf("unplugged", "acoustic", "sufi", "lofi", "lo-fi", "stripped", "piano", "qawwali", "ghazal", "peaceful")
                 .any { combined.contains(it) } -> Genre.ACOUSTIC
-            listOf("remix", "dj ", "party", "dance", "club", "edm", "electronic", "mashup", "disco", "bass")
+            !hasSadTone && listOf("remix", "dj ", "party", "dance", "club", "edm", "electronic", "mashup", "disco", "bass")
                 .any { combined.contains(it) } -> Genre.DANCE
             listOf("indie", "prateek kuhad", "anuv jain", "local train", "when chai met toast", "ritviz", "zaeden", "mitraz")
                 .any { combined.contains(it) } -> Genre.INDIE
             listOf("90s", "80s", "retro", "classic", "kumar sanu", "alka yagnik", "udit narayan", "kishore kumar", "rd burman", "lata mangeshkar", "mohammed rafi", "old ")
                 .any { combined.contains(it) } -> Genre.RETRO
-            else -> Genre.BOLLYWOOD
+            else -> {
+                val detected = detectTrackLanguage(null, title, artist, album, extraMeta)
+                if (detected.equals("English", ignoreCase = true) || WESTERN_ARTIST_TOKENS.any { artist.lowercase().contains(it) }) {
+                    Genre.INDIE
+                } else {
+                    Genre.BOLLYWOOD
+                }
+            }
         }
     }
 
     /**
-     * Consistent cross-provider language filter: enforces explicit metadata when present
-     * and prevents mismatched regional/foreign tracks when metadata lacks explicit language tags.
+     * Consistent cross-provider language & genre filter:
+     * - Enforces target languages and blocks English leakage into Bollywood
+     * - Eliminates sad and heartbroken songs from Party & Dance
      */
     fun matchesLanguageSelection(
         targetLanguages: Set<String>,
@@ -351,8 +381,32 @@ object ProviderNormalizer {
         title: String,
         artist: String,
         album: String,
-        genreMeta: String = ""
+        genreMeta: String = "",
+        requestedGenre: Genre? = null
     ): Boolean {
+        val combined = "$title $artist $album $genreMeta".lowercase()
+
+        // Hard Filter: Party & Dance must NEVER contain sad, crying, or heartbreak tracks
+        if (requestedGenre == Genre.DANCE) {
+            if (SAD_OR_SLOW_KEYWORDS.any { combined.contains(it) }) {
+                return false
+            }
+        }
+
+        // Hard Filter: Bollywood is strictly Indian / Hindi cinema music; never admit English pop tracks
+        if (requestedGenre == Genre.BOLLYWOOD) {
+            if (explicitLanguage != null && explicitLanguage.equals("english", ignoreCase = true)) {
+                return false
+            }
+            if (WESTERN_ARTIST_TOKENS.any { artist.lowercase().contains(it) }) {
+                return false
+            }
+            val detected = detectTrackLanguage(explicitLanguage, title, artist, album, genreMeta)
+            if (detected.equals("English", ignoreCase = true)) {
+                return false
+            }
+        }
+
         if (targetLanguages.isEmpty()) return true
         val userWantsEnglish = targetLanguages.any { it.equals("English", ignoreCase = true) }
 
@@ -362,9 +416,17 @@ object ProviderNormalizer {
             return targetLanguages.any { it.equals(cleanExplicit, ignoreCase = true) }
         }
 
-        val combined = "$title $artist $album $genreMeta".lowercase()
-        if (!userWantsEnglish && FOREIGN_NON_INDIAN_GENRES.any { combined.contains(it) }) {
-            return false
+        if (!userWantsEnglish) {
+            if (FOREIGN_NON_INDIAN_GENRES.any { combined.contains(it) }) {
+                return false
+            }
+            if (WESTERN_ARTIST_TOKENS.any { artist.lowercase().contains(it) }) {
+                return false
+            }
+            val detected = detectTrackLanguage(null, title, artist, album, genreMeta)
+            if (detected.equals("English", ignoreCase = true)) {
+                return false
+            }
         }
 
         // If user selected only specific regional languages, avoid cross-regional mismatches tagged in text
@@ -458,14 +520,14 @@ object ProviderNormalizer {
     ): String {
         if (!artistSeed.isNullOrBlank()) return "$artistSeed $lang"
         if (concise) {
-            // Concise 1-2 keyword terms required for strict-AND search APIs like Deezer
+            // Concise 1-2 keyword terms for concise search queries
             val concisePool = if (lang.equals("Hindi", ignoreCase = true)) {
                 when (genre) {
                     null -> listOf("bollywood", "arijit singh", "hindi", "pritam", "punjabi", "indie hindi")
-                    Genre.BOLLYWOOD -> listOf("bollywood", "arijit singh", "pritam", "shreya ghoshal", "hindi film")
+                    Genre.BOLLYWOOD -> listOf("bollywood", "arijit singh", "pritam", "shreya ghoshal", "hindi film", "hindi movie songs")
                     Genre.HIPHOP -> listOf("hindi rap", "divine", "krsna", "raftaar", "badshah", "emiway")
                     Genre.INDIE -> listOf("anuv jain", "prateek kuhad", "local train", "ritviz", "indie hindi")
-                    Genre.DANCE -> listOf("bollywood dance", "party hindi", "dj hindi", "badshah", "club hindi")
+                    Genre.DANCE -> listOf("bollywood dance hits", "hindi party hits", "peppy hindi dance", "club hindi songs", "high energy dance")
                     Genre.ACOUSTIC -> listOf("unplugged hindi", "sufi", "lofi hindi", "atif aslam", "acoustic hindi")
                     Genre.RETRO -> listOf("kumar sanu", "kishore kumar", "90s bollywood", "udit narayan")
                     Genre.PUNJABI -> listOf("punjabi", "diljit dosanjh", "karan aujla", "ap dhillon")
@@ -528,11 +590,11 @@ object ProviderNormalizer {
                     "the local train indie rock"
                 )
                 Genre.DANCE -> listOf(
-                    "bollywood dance party remix",
-                    "club dance hindi hits",
-                    "dj remix bollywood party",
-                    "electronic dance music hindi",
-                    "punjabi bollywood party dance"
+                    "high energy bollywood dance party hits",
+                    "peppy bollywood party dance songs",
+                    "upbeat hindi party dance club hits",
+                    "fast energetic bollywood dance hits",
+                    "punjabi bollywood party dance upbeat"
                 )
                 Genre.ACOUSTIC -> listOf(
                     "hindi acoustic songs",

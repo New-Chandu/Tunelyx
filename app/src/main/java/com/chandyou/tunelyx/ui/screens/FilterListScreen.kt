@@ -67,6 +67,7 @@ fun FilterListScreen(
     modifier: Modifier = Modifier
 ) {
     val colors = TunelyxTheme.colors
+    val currentProvider by viewModel.musicProvider.collectAsState()
 
     val filterRemix by viewModel.filterRemix.collectAsState()
     val filterAcoustic by viewModel.filterAcoustic.collectAsState()
@@ -76,6 +77,7 @@ fun FilterListScreen(
     val blockedArtists by viewModel.blockedArtists.collectAsState()
 
     var keywordInput by remember { mutableStateOf("") }
+    var artistInput by remember { mutableStateOf("") }
 
     Column(
         modifier = modifier
@@ -132,11 +134,14 @@ fun FilterListScreen(
             onCheckedChange = { viewModel.setFilterRemix(it) }
         )
 
-        FilterSwitchRow(
-            label = "Filter Acoustic Versions",
-            checked = filterAcoustic,
-            onCheckedChange = { viewModel.setFilterAcoustic(it) }
-        )
+        // Apple Music / iTunes does not support sad/acoustic songs specifically; hide acoustic toggle when active
+        if (currentProvider != com.chandyou.tunelyx.model.MusicProvider.ITUNES) {
+            FilterSwitchRow(
+                label = "Filter Acoustic Versions",
+                checked = filterAcoustic,
+                onCheckedChange = { viewModel.setFilterAcoustic(it) }
+            )
+        }
 
         FilterSwitchRow(
             label = "Filter Covers & Live Recordings",
@@ -282,87 +287,130 @@ fun FilterListScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 3. Blocked Artists Management Card
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(colors.cardBg)
-                .border(1.dp, colors.borderSubtle, RoundedCornerShape(16.dp))
-                .padding(16.dp)
+        // SECTION: BLOCKED ARTISTS
+        Text(
+            text = "BLOCKED ARTISTS",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = colors.accentGreen,
+            letterSpacing = 1.sp,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x18FFFFFF))
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
-                Text(
-                    text = "BLOCKED ARTISTS",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textSecondary,
-                    letterSpacing = 0.8.sp
+                BasicTextField(
+                    value = artistInput,
+                    onValueChange = { artistInput = it },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    cursorBrush = SolidColor(colors.accentGreen),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            val trimmed = artistInput.trim()
+                            if (trimmed.isNotBlank()) {
+                                viewModel.blockArtist(trimmed)
+                                artistInput = ""
+                            }
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
                 )
-                if (blockedArtists.isNotEmpty()) {
-                    Text(
-                        text = "${blockedArtists.size} blocked",
-                        fontSize = 12.sp,
-                        color = colors.textSecondary
-                    )
-                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            val addArtistInteraction = remember { MutableInteractionSource() }
+            val isAddArtistPressed by addArtistInteraction.collectIsPressedAsState()
+            val addArtistScale by animateFloatAsState(
+                targetValue = if (isAddArtistPressed) 0.92f else 1f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                label = "addArtistScale"
+            )
 
-            if (blockedArtists.isEmpty()) {
+            Button(
+                onClick = {
+                    val trimmed = artistInput.trim()
+                    if (trimmed.isNotBlank()) {
+                        viewModel.blockArtist(trimmed)
+                        artistInput = ""
+                    }
+                },
+                interactionSource = addArtistInteraction,
+                colors = ButtonDefaults.buttonColors(containerColor = colors.accentGreen),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .height(44.dp)
+                    .scale(addArtistScale)
+            ) {
                 Text(
-                    text = "No artists blocked. Blocked artists will never appear in your discovery deck.",
+                    text = "Add",
+                    color = colors.onAccent,
                     fontSize = 13.sp,
-                    color = colors.textTertiary,
-                    lineHeight = 18.sp
+                    fontWeight = FontWeight.Bold
                 )
-            } else {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    blockedArtists.forEach { artistName ->
-                        val artistInteraction = remember { MutableInteractionSource() }
-                        val isArtistPressed by artistInteraction.collectIsPressedAsState()
-                        val artistScale by animateFloatAsState(
-                            targetValue = if (isArtistPressed) 0.92f else 1f,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-                            label = "artistScale"
-                        )
+            }
+        }
 
-                        Row(
-                            modifier = Modifier
-                                .scale(artistScale)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0x18FFFFFF))
-                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
-                                .clickable(
-                                    interactionSource = artistInteraction,
-                                    indication = null
-                                ) { viewModel.unblockArtist(artistName) }
-                                .padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = artistName,
-                                fontSize = 12.sp,
-                                color = colors.textPrimary,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = "Unblock artist",
-                                tint = colors.dislikeRed,
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
+        if (blockedArtists.isNotEmpty()) {
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                blockedArtists.forEach { artistName ->
+                    val artistInteraction = remember { MutableInteractionSource() }
+                    val isArtistPressed by artistInteraction.collectIsPressedAsState()
+                    val artistScale by animateFloatAsState(
+                        targetValue = if (isArtistPressed) 0.92f else 1f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                        label = "artistScale"
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .scale(artistScale)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x18FFFFFF))
+                            .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = artistInteraction,
+                                indication = null
+                            ) { viewModel.unblockArtist(artistName) }
+                            .padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = artistName,
+                            fontSize = 12.sp,
+                            color = colors.textPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Unblock artist",
+                            tint = colors.dislikeRed,
+                            modifier = Modifier.size(15.dp)
+                        )
                     }
                 }
             }

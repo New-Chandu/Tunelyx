@@ -16,6 +16,36 @@ import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Dedicated JioSaavn API provider handler.
+ *
+ * Real response payload reference schema (queried from https://www.jiosaavn.com/api.php?__call=search.getResults):
+ * ```json
+ * {
+ *   "id": "QcfFd62t",
+ *   "title": "Tu Mil Jaaye (From &quot;KING&quot;)",
+ *   "type": "song",
+ *   "image": "https://c.saavncdn.com/320/Tu-Mil-Jaaye-From-KING-Hindi-2026-20261031131042-150x150.jpg",
+ *   "language": "hindi",
+ *   "year": "2026",
+ *   "more_info": {
+ *     "music": "Sachin-Jigar, Ed Sheeran",
+ *     "album": "Tu Mil Jaaye (From &quot;KING&quot;)",
+ *     "320kbps": "true",
+ *     "encrypted_media_url": "ID2ieOjCrwfgWvL5sXl4B1ImC5QfbsDyj4ZDyRkajGN2q4KeBCxtREh4spXbqfrBgV8FtvB9QO2H160XU/sCaBw7tS9a8Gtq",
+ *     "duration": "315",
+ *     "vlink": "https://jiotunepreview.jio.com/content/Converted/010910093821626.mp3",
+ *     "artistMap": {
+ *       "primary_artists": [
+ *         { "id": "461968", "name": "Sachin-Jigar", "role": "primary_artists" },
+ *         { "id": "578407", "name": "Ed Sheeran", "role": "primary_artists" },
+ *         { "id": "459320", "name": "Arijit Singh", "role": "primary_artists" }
+ *       ]
+ *     }
+ *   }
+ * }
+ * ```
+ */
 object JioSaavnProvider : MusicProviderClient {
 
     override val provider: MusicProvider = MusicProvider.JIOSAAVN

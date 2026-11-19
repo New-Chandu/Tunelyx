@@ -12,6 +12,7 @@ import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -23,9 +24,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -54,6 +57,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -93,21 +97,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -124,6 +135,8 @@ import com.chandyou.tunelyx.model.Genre
 import com.chandyou.tunelyx.model.SwipeDirection
 import com.chandyou.tunelyx.model.Track
 import com.chandyou.tunelyx.model.formatDuration
+import com.chandyou.tunelyx.ui.animations.MorphPlayPauseButton
+import com.chandyou.tunelyx.ui.animations.MusicInteractionPalette
 import com.chandyou.tunelyx.ui.components.DeckActionControls
 import com.chandyou.tunelyx.ui.theme.ArtworkAmbientHelper
 import com.chandyou.tunelyx.ui.theme.TunelyxTheme
@@ -131,6 +144,7 @@ import com.chandyou.tunelyx.viewmodel.DiscoverViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -164,6 +178,7 @@ fun DiscoverDeckScreen(
     val isImmersiveDockEnabled by viewModel.isImmersiveDockEnabled.collectAsState()
     val pendingProgrammaticSwipe by viewModel.pendingProgrammaticSwipe.collectAsState()
     val activeProvider by viewModel.musicProvider.collectAsState()
+    val shouldAnimateDeckEntrance by viewModel.shouldAnimateDeckEntrance.collectAsState()
 
     val artworkUnlockedIds = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -206,41 +221,24 @@ fun DiscoverDeckScreen(
 
     SharedTransitionLayout(modifier = modifier.fillMaxSize()) {
         val sharedScope = this
-        AnimatedContent(
-            targetState = showTrackDetailsSheet && currentTrack != null,
-            transitionSpec = {
-                fadeIn(tween(240, easing = FastOutSlowInEasing)) togetherWith
-                    fadeOut(tween(190, easing = FastOutSlowInEasing))
-            },
-            label = "cardToInfoSharedTransition"
-        ) { showingInfoCard ->
-            val animScope = this
-            if (showingInfoCard && currentTrack != null) {
-                TrackDetailsCardOverlay(
-                    track = currentTrack,
-                    viewModel = viewModel,
-                    isImmersiveDockEnabled = isImmersiveDockEnabled,
-                    sharedTransitionScope = sharedScope,
-                    animatedVisibilityScope = animScope,
-                    onDismiss = { showTrackDetailsSheet = false }
-                )
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .let { mod ->
-                            if (isImmersiveDockEnabled) {
-                                // Dock sits at bottom + 8dp + navigationBarsPadding; slightly taller tray tops at 146.dp
-                                mod.navigationBarsPadding().padding(bottom = 146.dp)
-                            } else {
-                                mod.padding(bottom = 96.dp)
-                            }
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // 1. Provider-Scoped Discover Filter Chips (All + Genres supported by the active platform)
-                    DiscoverGenreSelectorRow(
-                        genres = availableGenres,
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .let { mod ->
+                    if (isImmersiveDockEnabled) {
+                        // Dock sits at bottom + 8dp + navigationBarsPadding; slightly taller tray tops at 146.dp
+                        mod.navigationBarsPadding().padding(bottom = 146.dp)
+                    } else {
+                        // Bar navigation control (action bar / mini player + floating nav)
+                        mod.navigationBarsPadding().padding(bottom = 138.dp)
+                    }
+                },
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 1. Provider-Scoped Discover Filter Chips (All + Genres supported by the active platform)
+            DiscoverGenreSelectorRow(
+                genres = availableGenres,
                         selectedGenre = selectedDiscoverGenre,
                         onGenreSelected = { viewModel.selectDiscoverGenre(it) }
                     )
@@ -324,109 +322,132 @@ fun DiscoverDeckScreen(
                                 statusText = errTitle
                             )
                         } else if (currentTrack != null) {
-                            val deckTransitionSpec = spring<Float>(dampingRatio = 0.94f, stiffness = Spring.StiffnessMedium)
-                            val deckDpTransitionSpec = spring<androidx.compose.ui.unit.Dp>(dampingRatio = 0.94f, stiffness = Spring.StiffnessMedium)
+                            androidx.compose.animation.AnimatedContent(
+                                targetState = showTrackDetailsSheet,
+                                transitionSpec = {
+                                    (androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(220)) +
+                                            androidx.compose.animation.scaleIn(initialScale = 0.96f, animationSpec = androidx.compose.animation.core.tween(220)))
+                                        .togetherWith(
+                                            androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(180)) +
+                                                    androidx.compose.animation.scaleOut(targetScale = 0.96f, animationSpec = androidx.compose.animation.core.tween(180))
+                                        )
+                                },
+                                label = "TrackDetailsTransition",
+                                modifier = Modifier.fillMaxSize()
+                            ) { isShowingDetails ->
+                                if (isShowingDetails) {
+                                    TrackDetailsCardOverlay(
+                                        track = currentTrack,
+                                        viewModel = viewModel,
+                                        onDismiss = { showTrackDetailsSheet = false },
+                                        sharedTransitionScope = sharedScope,
+                                        animatedVisibilityScope = this@AnimatedContent,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        val deckTransitionSpec = spring<Float>(dampingRatio = 0.94f, stiffness = Spring.StiffnessMedium)
+                                        val deckDpTransitionSpec = spring<androidx.compose.ui.unit.Dp>(dampingRatio = 0.94f, stiffness = Spring.StiffnessMedium)
 
-                            val middleScale by animateFloatAsState(
-                                targetValue = 0.96f + (0.04f * dragIntensity),
-                                animationSpec = deckTransitionSpec,
-                                label = "middleScale"
-                            )
-                            val middleOffset by animateDpAsState(
-                                targetValue = (20f * (1f - dragIntensity)).dp,
-                                animationSpec = deckDpTransitionSpec,
-                                label = "middleOffset"
-                            )
-                            val middleRotation by animateFloatAsState(
-                                targetValue = -3.8f * (1f - dragIntensity),
-                                animationSpec = deckTransitionSpec,
-                                label = "middleRotation"
-                            )
+                                        val middleScale by animateFloatAsState(
+                                            targetValue = 0.96f + (0.04f * dragIntensity),
+                                            animationSpec = deckTransitionSpec,
+                                            label = "middleScale"
+                                        )
+                                        val middleOffset by animateDpAsState(
+                                            targetValue = (20f * (1f - dragIntensity)).dp,
+                                            animationSpec = deckDpTransitionSpec,
+                                            label = "middleOffset"
+                                        )
+                                        val middleRotation by animateFloatAsState(
+                                            targetValue = -3.8f * (1f - dragIntensity),
+                                            animationSpec = deckTransitionSpec,
+                                            label = "middleRotation"
+                                        )
 
-                            val backScale by animateFloatAsState(
-                                targetValue = 0.92f + (0.04f * dragIntensity),
-                                animationSpec = deckTransitionSpec,
-                                label = "backScale"
-                            )
-                            val backOffset by animateDpAsState(
-                                targetValue = (38f - (18f * dragIntensity)).dp,
-                                animationSpec = deckDpTransitionSpec,
-                                label = "backOffset"
-                            )
-                            val backRotation by animateFloatAsState(
-                                targetValue = 4.6f - (8.4f * dragIntensity),
-                                animationSpec = deckTransitionSpec,
-                                label = "backRotation"
-                            )
+                                        val backScale by animateFloatAsState(
+                                            targetValue = 0.92f + (0.04f * dragIntensity),
+                                            animationSpec = deckTransitionSpec,
+                                            label = "backScale"
+                                        )
+                                        val backOffset by animateDpAsState(
+                                            targetValue = (38f - (18f * dragIntensity)).dp,
+                                            animationSpec = deckDpTransitionSpec,
+                                            label = "backOffset"
+                                        )
+                                        val backRotation by animateFloatAsState(
+                                            targetValue = 4.6f - (8.4f * dragIntensity),
+                                            animationSpec = deckTransitionSpec,
+                                            label = "backRotation"
+                                        )
 
-                            // Back card
-                            thirdTrack?.let {
-                                CardItem(
-                                    track = it,
-                                    isImmersive = isImmersive,
-                                    viewModel = viewModel,
-                                    isArtworkUnlocked = true,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .scale(backScale)
-                                        .offset(y = backOffset)
-                                        .rotate(backRotation),
-                                    isFront = false
-                                )
-                            }
-
-                            // Middle card
-                            nextTrack?.let {
-                                CardItem(
-                                    track = it,
-                                    isImmersive = isImmersive,
-                                    viewModel = viewModel,
-                                    isArtworkUnlocked = true,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .scale(middleScale)
-                                        .offset(y = middleOffset)
-                                        .rotate(middleRotation),
-                                    isFront = false
-                                )
-                            }
-
-                            // Front active swipeable card (animate entrance only on initial deck load, never shrink/bounce on swipe promotion)
-                            key(currentTrack.id) {
-                                SwipeableFrontCard(
-                                    track = currentTrack,
-                                    isImmersive = isImmersive,
-                                    viewModel = viewModel,
-                                    isArtworkUnlocked = true,
-                                    animateOnAppear = (currentIndex == 0),
-                                    deckGeneration = deckGeneration,
-                                    programmaticSwipe = programmaticSwipeDirection,
-                                    onProgrammaticSwipeHandled = { programmaticSwipeDirection = null },
-                                    sharedTransitionScope = sharedScope,
-                                    animatedVisibilityScope = animScope,
-                                    onDragUpdate = { dir, intensity ->
-                                        activeDragDirection = dir
-                                        dragIntensity = intensity
-                                        viewModel.updateDeckDragFeedback(dir, intensity)
-                                    },
-                                    onSwipeComplete = { dir ->
-                                        if (viewModel.prefs.isHapticEnabled) {
-                                            when (dir) {
-                                                SwipeDirection.LIKE -> view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                                                SwipeDirection.DISLIKE -> view.performHapticFeedback(HapticFeedbackConstants.REJECT)
-                                                SwipeDirection.BOOKMARK_INAPP -> view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                                SwipeDirection.SKIP_NEUTRAL -> view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                            }
+                                        // Back card
+                                        thirdTrack?.let {
+                                            CardItem(
+                                                track = it,
+                                                isImmersive = isImmersive,
+                                                viewModel = viewModel,
+                                                isArtworkUnlocked = true,
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .scale(backScale)
+                                                    .offset(y = backOffset)
+                                                    .rotate(backRotation),
+                                                isFront = false
+                                            )
                                         }
-                                        viewModel.onSwipe(dir)
-                                        programmaticSwipeDirection = null
-                                        activeDragDirection = null
-                                        dragIntensity = 0f
-                                        viewModel.updateDeckDragFeedback(null, 0f)
-                                    },
-                                    onOpenTrackDetails = { showTrackDetailsSheet = true },
-                                    onShareTrack = { songToShare = currentTrack }
-                                )
+
+                                        // Middle card
+                                        nextTrack?.let {
+                                            CardItem(
+                                                track = it,
+                                                isImmersive = isImmersive,
+                                                viewModel = viewModel,
+                                                isArtworkUnlocked = true,
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .scale(middleScale)
+                                                    .offset(y = middleOffset)
+                                                    .rotate(middleRotation),
+                                                isFront = false
+                                            )
+                                        }
+
+                                        // Front active swipeable card
+                                        key(currentTrack.id) {
+                                            SwipeableFrontCard(
+                                                track = currentTrack,
+                                                isImmersive = isImmersive,
+                                                viewModel = viewModel,
+                                                isArtworkUnlocked = true,
+                                                animateOnAppear = (currentIndex == 0 && shouldAnimateDeckEntrance),
+                                                deckGeneration = deckGeneration,
+                                                programmaticSwipe = programmaticSwipeDirection,
+                                                onProgrammaticSwipeHandled = { programmaticSwipeDirection = null },
+                                                sharedTransitionScope = sharedScope,
+                                                animatedVisibilityScope = this@AnimatedContent,
+                                                onDragUpdate = { dir, intensity ->
+                                                    activeDragDirection = dir
+                                                    dragIntensity = intensity
+                                                    viewModel.updateDeckDragFeedback(dir, intensity)
+                                                },
+                                                onSwipeComplete = { dir ->
+                                                    viewModel.performHaptic(view, isStrong = (dir == SwipeDirection.LIKE || dir == SwipeDirection.DISLIKE))
+                                                    viewModel.onSwipe(dir)
+                                                    programmaticSwipeDirection = null
+                                                    activeDragDirection = null
+                                                    dragIntensity = 0f
+                                                    viewModel.updateDeckDragFeedback(null, 0f)
+                                                },
+                                                onOpenTrackDetails = { showTrackDetailsSheet = true },
+                                                onShareTrack = { songToShare = currentTrack }
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             DiscoverStatusCard(
@@ -440,32 +461,10 @@ fun DiscoverDeckScreen(
                         }
                     }
 
-                    if (isImmersiveDockEnabled) {
-                        // Equal bottom gap matching top Spacer(22.dp) above the card
-                        Spacer(modifier = Modifier.height(22.dp))
-                    } else {
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // 4. Tactile Action Controls (Undo, Bookmark, Like/Resume, Dislike, Skip)
-                        DeckActionControls(
-                            currentTrack = currentTrack,
-                            activeDragDirection = activeDragDirection,
-                            dragIntensity = dragIntensity,
-                            canUndo = canUndoSwipe,
-                            isPlaying = isPlaying,
-                            isHapticEnabled = viewModel.prefs.isHapticEnabled,
-                            onActionUndo = { viewModel.undoLastSwipe() },
-                            onActionDislike = { programmaticSwipeDirection = SwipeDirection.DISLIKE },
-                            onActionSkip = { programmaticSwipeDirection = SwipeDirection.SKIP_NEUTRAL },
-                            onActionBookmark = { programmaticSwipeDirection = SwipeDirection.BOOKMARK_INAPP },
-                            onActionLike = { programmaticSwipeDirection = SwipeDirection.LIKE },
-                            onResumeAudio = { viewModel.audioEngine.resume() }
-                        )
-                    }
+                    // Equal bottom gap matching top Spacer(22.dp) above the card
+                    Spacer(modifier = Modifier.height(22.dp))
                 }
             }
-        }
-    }
 
     // Simple Popup Dialog for Sharing Platform Song Link
     songToShare?.let { track ->
@@ -747,65 +746,315 @@ private fun DiscoverGenreSelectorRow(
     selectedGenre: Genre?,
     onGenreSelected: (Genre?) -> Unit
 ) {
-    val colors = TunelyxTheme.colors
-    Row(
-        modifier = Modifier
+    val chipOptions: List<Pair<Genre?, String>> = remember(genres) {
+        listOf(null to "All") + genres.map { it to it.displayName }
+    }
+    val genreLabels = remember(chipOptions) { chipOptions.map { it.second } }
+    val selectedIndex = remember(chipOptions, selectedGenre) {
+        val idx = chipOptions.indexOfFirst { it.first == selectedGenre }
+        if (idx >= 0) idx else 0
+    }
+
+    GenreFilterChips(
+        genres = genreLabels,
+        selectedIndex = selectedIndex,
+        onSelect = { idx ->
+            val targetGenre = chipOptions.getOrNull(idx)?.first
+            onGenreSelected(targetGenre)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        showEqualizerMotif = true
+    )
+}
+
+private data class ChipBounds(val left: Float, val right: Float)
+
+@Composable
+fun GenreFilterChips(
+    genres: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    showEqualizerMotif: Boolean = true
+) {
+    val pillColor = Color(0xFFF0F1EB)
+    val darkInk = Color(0xFF111312)
+    val mutedInk = Color(0xFF8F9591)
+    val dotColor = Color(0xFF535855)
+
+    val density = LocalDensity.current
+    val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
+
+    val chipBounds = remember { mutableStateMapOf<Int, ChipBounds>() }
+    val dotCenters = remember { mutableStateMapOf<Int, Float>() }
+
+    val pillLeft = remember { Animatable(0f) }
+    val pillRight = remember { Animatable(0f) }
+    val rippleProgress = remember { Animatable(1f) }
+    var hasInitialized by remember { mutableStateOf(false) }
+    var prevIndex by remember { mutableIntStateOf(selectedIndex) }
+
+    // Track selected chip bounds & run asymmetric elastic edge springs
+    LaunchedEffect(selectedIndex, chipBounds[selectedIndex]) {
+        val target = chipBounds[selectedIndex] ?: return@LaunchedEffect
+        if (!hasInitialized) {
+            pillLeft.snapTo(target.left)
+            pillRight.snapTo(target.right)
+            hasInitialized = true
+            prevIndex = selectedIndex
+            return@LaunchedEffect
+        }
+
+        val movingRight = selectedIndex >= prevIndex
+        prevIndex = selectedIndex
+
+        val leadSpec = spring<Float>(dampingRatio = 0.68f, stiffness = 560f)
+        val trailSpec = spring<Float>(dampingRatio = 0.72f, stiffness = 290f)
+
+        launch { pillLeft.animateTo(target.left, if (movingRight) trailSpec else leadSpec) }
+        launch { pillRight.animateTo(target.right, if (movingRight) leadSpec else trailSpec) }
+        launch {
+            rippleProgress.snapTo(0f)
+            rippleProgress.animateTo(1f, tween(420, easing = FastOutSlowInEasing))
+        }
+
+        // Keep active chip comfortably inside viewport
+        val padPx = with(density) { 42.dp.toPx() }
+        val viewportW = scrollState.viewportSize.toFloat()
+        if (viewportW > 0f) {
+            if (target.left - padPx < scrollState.value) {
+                scrollState.animateScrollTo((target.left - padPx).coerceAtLeast(0f).toInt())
+            } else if (target.right + padPx > scrollState.value + viewportW) {
+                scrollState.animateScrollTo((target.right + padPx - viewportW).toInt())
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+            .horizontalScroll(scrollState)
+            .padding(horizontal = 18.dp, vertical = 8.dp)
     ) {
-        val chipOptions: List<Pair<Genre?, String>> = listOf(null to "All") + genres.map { it to it.displayName }
-        chipOptions.forEach { (genreOption, label) ->
-            val isSelected = genreOption == selectedGenre
-            val interactionSource = remember { MutableInteractionSource() }
-            val isPressed by interactionSource.collectIsPressedAsState()
+        Box(
+            modifier = Modifier
+                .height(36.dp)
+                // Draw the elastic pill + tap ripple behind the masked text
+                .drawBehind {
+                    if (!hasInitialized) return@drawBehind
+                    val left = min(pillLeft.value, pillRight.value - 16.dp.toPx())
+                    val right = maxOf(pillRight.value, left + 16.dp.toPx())
+                    val speed = (abs(pillLeft.velocity) + abs(pillRight.velocity)) * 0.5f
+                    val squash = (speed * 0.0016f).coerceIn(0f, 3.5.dp.toPx())
+                    val radius = CornerRadius(size.height / 2f)
 
-            val chipScale by animateFloatAsState(
-                targetValue = when {
-                    isPressed -> 0.94f
-                    isSelected -> 1.03f
-                    else -> 1.0f
-                },
-                animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
-                label = "chipScale"
-            )
-            val bgColor by animateColorAsState(
-                targetValue = if (isSelected) colors.accentGreen else colors.bgSurfaceElevated,
-                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                label = "chipBg"
-            )
-            val borderColor by animateColorAsState(
-                targetValue = if (isSelected) colors.accentGreen else colors.borderSubtle,
-                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                label = "chipBorder"
-            )
-            val labelColor by animateColorAsState(
-                targetValue = if (isSelected) colors.onAccent else colors.textPrimary,
-                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-                label = "chipText"
+                    // Subtle halo glow
+                    drawRoundRect(
+                        color = pillColor.copy(alpha = 0.10f),
+                        topLeft = Offset(left - 2.dp.toPx(), squash - 1.dp.toPx()),
+                        size = Size((right - left) + 4.dp.toPx(), size.height - squash * 2f + 2.dp.toPx()),
+                        cornerRadius = radius
+                    )
+
+                    // Main elastic capsule
+                    drawRoundRect(
+                        color = pillColor,
+                        topLeft = Offset(left, squash),
+                        size = Size(right - left, size.height - squash * 2f),
+                        cornerRadius = radius
+                    )
+
+                    // Acoustic tap ripple
+                    val rp = rippleProgress.value
+                    if (rp < 1f) {
+                        val expand = rp * 8.dp.toPx()
+                        drawRoundRect(
+                            color = pillColor.copy(alpha = (1f - rp) * 0.42f),
+                            topLeft = Offset(left - expand, -expand * 0.45f),
+                            size = Size((right - left) + expand * 2f, size.height + expand * 0.9f),
+                            cornerRadius = radius,
+                            style = Stroke(width = 1.5.dp.toPx())
+                        )
+                    }
+                }
+        ) {
+            // Layer 1: Muted unselected labels + wake-reactive dots
+            ChipRowLayer(
+                genres = genres,
+                selectedIndex = selectedIndex,
+                textColor = mutedInk,
+                dotColor = dotColor,
+                showDots = true,
+                showEqualizerMotif = showEqualizerMotif,
+                showEqualizerGraphics = false,
+                pillLeft = pillLeft,
+                pillRight = pillRight,
+                dotCenters = dotCenters,
+                onChipBounds = { idx, bounds -> chipBounds[idx] = bounds },
+                onDotCenter = { idx, cx -> dotCenters[idx] = cx },
+                onChipClick = { idx ->
+                    scope.launch { onSelect(idx) }
+                }
             )
 
-            Box(
+            // Layer 2: Dark-ink labels clipped strictly to the moving pill capsule
+            ChipRowLayer(
+                genres = genres,
+                selectedIndex = selectedIndex,
+                textColor = darkInk,
+                dotColor = Color.Transparent,
+                showDots = false,
+                showEqualizerMotif = showEqualizerMotif,
+                showEqualizerGraphics = true,
+                pillLeft = pillLeft,
+                pillRight = pillRight,
+                dotCenters = dotCenters,
+                modifier = Modifier.drawWithContent {
+                    if (!hasInitialized) return@drawWithContent
+                    val left = min(pillLeft.value, pillRight.value - 16.dp.toPx())
+                    val right = maxOf(pillRight.value, left + 16.dp.toPx())
+                    val speed = (abs(pillLeft.velocity) + abs(pillRight.velocity)) * 0.5f
+                    val squash = (speed * 0.0016f).coerceIn(0f, 3.5.dp.toPx())
+                    val clip = Path().apply {
+                        addRoundRect(
+                            RoundRect(
+                                left = left,
+                                top = squash,
+                                right = right,
+                                bottom = size.height - squash,
+                                cornerRadius = CornerRadius(size.height / 2f)
+                            )
+                        )
+                    }
+                    clipPath(clip) {
+                        this@drawWithContent.drawContent()
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChipRowLayer(
+    genres: List<String>,
+    selectedIndex: Int,
+    textColor: Color,
+    dotColor: Color,
+    showDots: Boolean,
+    showEqualizerMotif: Boolean,
+    showEqualizerGraphics: Boolean,
+    pillLeft: Animatable<Float, AnimationVector1D>,
+    pillRight: Animatable<Float, AnimationVector1D>,
+    dotCenters: Map<Int, Float>,
+    modifier: Modifier = Modifier,
+    onChipBounds: ((Int, ChipBounds) -> Unit)? = null,
+    onDotCenter: ((Int, Float) -> Unit)? = null,
+    onChipClick: ((Int) -> Unit)? = null
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.height(36.dp)
+    ) {
+        genres.forEachIndexed { index, label ->
+            val isSelected = index == selectedIndex
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .scale(chipScale)
-                    .clip(CircleShape)
-                    .background(bgColor)
-                    .border(1.dp, borderColor, CircleShape)
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = null
-                    ) { onGenreSelected(genreOption) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center
+                    .height(36.dp)
+                    .onPlaced { coords ->
+                        val left = coords.positionInParent().x
+                        onChipBounds?.invoke(index, ChipBounds(left, left + coords.size.width))
+                    }
+                    .then(
+                        if (onChipClick != null) {
+                            Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { onChipClick(index) }
+                        } else Modifier
+                    )
+                    .padding(horizontal = 15.dp)
             ) {
+                if (showEqualizerMotif) {
+                    AnimatedVisibility(
+                        visible = isSelected,
+                        enter = expandHorizontally(spring(dampingRatio = 0.65f, stiffness = 480f)) + fadeIn(),
+                        exit = shrinkHorizontally(tween(180)) + fadeOut()
+                    ) {
+                        Row {
+                            if (showEqualizerGraphics) {
+                                MiniEqualizerBars(color = textColor)
+                            } else {
+                                Spacer(Modifier.width(11.dp))
+                            }
+                            Spacer(Modifier.width(6.dp))
+                        }
+                    }
+                }
+
                 Text(
                     text = label,
-                    fontSize = 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = labelColor
+                    color = textColor,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
             }
+
+            if (index < genres.lastIndex) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .width(12.dp)
+                        .height(36.dp)
+                        .onPlaced { coords ->
+                            onDotCenter?.invoke(index, coords.positionInParent().x + coords.size.width / 2f)
+                        }
+                ) {
+                    if (showDots) {
+                        Box(
+                            modifier = Modifier
+                                .size(3.dp)
+                                .graphicsLayer {
+                                    val cx = dotCenters[index] ?: return@graphicsLayer
+                                    val inside = cx >= pillLeft.value - 4f && cx <= pillRight.value + 4f
+                                    val dist = min(abs(cx - pillLeft.value), abs(cx - pillRight.value))
+                                    val wake = (1f - (dist / 20.dp.toPx())).coerceIn(0f, 1f)
+                                    val s = if (inside) 0.2f else 1f + wake * 0.45f
+                                    scaleX = s
+                                    scaleY = s
+                                    alpha = if (inside) 0.05f else 0.7f + wake * 0.3f
+                                }
+                                .background(dotColor, CircleShape)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniEqualizerBars(color: Color) {
+    val inf = rememberInfiniteTransition(label = "eq")
+    val h1 by inf.animateFloat(0.35f, 0.95f, infiniteRepeatable(tween(420), RepeatMode.Reverse), label = "b1")
+    val h2 by inf.animateFloat(0.95f, 0.40f, infiniteRepeatable(tween(360), RepeatMode.Reverse), label = "b2")
+    val h3 by inf.animateFloat(0.45f, 0.90f, infiniteRepeatable(tween(470), RepeatMode.Reverse), label = "b3")
+
+    Canvas(modifier = Modifier.size(width = 11.dp, height = 11.dp)) {
+        val barW = 2.dp.toPx()
+        val gap = (size.width - barW * 3f) / 2f
+        val heights = listOf(h1, h2, h3)
+        heights.forEachIndexed { i, frac ->
+            val bh = size.height * frac
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(i * (barW + gap), (size.height - bh) / 2f),
+                size = Size(barW, bh),
+                cornerRadius = CornerRadius(barW / 2f)
+            )
         }
     }
 }
@@ -840,11 +1089,12 @@ private fun SwipeableFrontCard(
     val view = LocalView.current
     val swipeThresholdPx = with(LocalDensity.current) { 115.dp.toPx() }
 
-    // Crisp entrance ONLY on initial deck load; zero shrink/bounce when promoted smoothly after swipe
-    LaunchedEffect(track.id, deckGeneration) {
+    // Crisp entrance ONLY on initial deck load; zero shrink/bounce when promoted smoothly after swipe or tab switch
+    LaunchedEffect(track.id, deckGeneration, animateOnAppear) {
         if (animateOnAppear) {
             cardScale.snapTo(0.96f)
             cardScale.animateTo(1f, tween(160, easing = FastOutSlowInEasing))
+            viewModel.consumeDeckEntranceAnimation()
         } else {
             cardScale.snapTo(1f)
         }
@@ -1500,15 +1750,19 @@ private fun CardItem(
                                 .size(36.dp)
                                 .clip(CircleShape)
                                 .background(if (colors.isDark) Color(0x1EFFFFFF) else Color(0x10000000))
-                                .border(0.8.dp, colors.borderSubtle, CircleShape)
-                                .clickable { if (isFront) viewModel.audioEngine.togglePlayPause() },
+                                .border(0.8.dp, colors.borderSubtle, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = if (isCardPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isCardPlaying) "Pause" else "Play",
-                                tint = colors.textPrimary,
-                                modifier = Modifier.size(18.dp)
+                            MorphPlayPauseButton(
+                                isPlaying = isCardPlaying,
+                                onToggle = { if (isFront) viewModel.audioEngine.togglePlayPause() },
+                                touchSize = 36.dp,
+                                iconSize = 18.dp,
+                                palette = MusicInteractionPalette(
+                                    active = colors.textPrimary,
+                                    inactive = colors.textPrimary,
+                                    ripple = colors.accentGreenGlow
+                                )
                             )
                         }
                     }
@@ -1907,15 +2161,19 @@ private fun CardItem(
                                 .size(32.dp)
                                 .clip(CircleShape)
                                 .background(colors.bgGlass)
-                                .border(0.5.dp, colors.borderSubtle, CircleShape)
-                                .clickable { if (isFront) viewModel.audioEngine.togglePlayPause() },
+                                .border(0.5.dp, colors.borderSubtle, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = if (isCardPlayingMin) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isCardPlayingMin) "Pause" else "Play",
-                                tint = colors.textPrimary,
-                                modifier = Modifier.size(16.dp)
+                            MorphPlayPauseButton(
+                                isPlaying = isCardPlayingMin,
+                                onToggle = { if (isFront) viewModel.audioEngine.togglePlayPause() },
+                                touchSize = 32.dp,
+                                iconSize = 16.dp,
+                                palette = MusicInteractionPalette(
+                                    active = colors.textPrimary,
+                                    inactive = colors.textPrimary,
+                                    ripple = colors.accentGreenGlow
+                                )
                             )
                         }
                     }
@@ -1967,10 +2225,10 @@ private fun CardItem(
 private fun TrackDetailsCardOverlay(
     track: Track,
     viewModel: DiscoverViewModel,
-    isImmersiveDockEnabled: Boolean,
-    sharedTransitionScope: SharedTransitionScope,
-    animatedVisibilityScope: AnimatedVisibilityScope,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null
 ) {
     val colors = TunelyxTheme.colors
     val separatedArtists = remember(track.id, track.artist, track.artists) { track.displayArtists() }
@@ -1981,46 +2239,32 @@ private fun TrackDetailsCardOverlay(
     var isAlbumExpanded by remember { mutableStateOf(false) }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
-            .let { mod ->
-                if (isImmersiveDockEnabled) {
-                    mod.navigationBarsPadding().padding(bottom = 148.dp)
-                } else {
-                    mod.padding(bottom = 96.dp)
-                }
-            }
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .sharedKeyBounds("card_${track.id}", true, sharedTransitionScope, animatedVisibilityScope)
-                .shadow(
-                    elevation = 18.dp,
-                    shape = RoundedCornerShape(26.dp),
-                    ambientColor = cachedAmbient.copy(alpha = 0.35f),
-                    spotColor = if (colors.isDark) Color.Black else Color(0x33000000)
-                )
-                .clip(RoundedCornerShape(26.dp))
-                .background(colors.bgSurfaceElevated)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            cachedAmbient.copy(alpha = if (colors.isDark) 0.14f else 0.08f),
-                            Color.Transparent
-                        )
+            .shadow(
+                elevation = 18.dp,
+                shape = RoundedCornerShape(26.dp),
+                ambientColor = cachedAmbient.copy(alpha = 0.35f),
+                spotColor = if (colors.isDark) Color.Black else Color(0x33000000)
+            )
+            .clip(RoundedCornerShape(26.dp))
+            .background(colors.bgSurfaceElevated)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        cachedAmbient.copy(alpha = if (colors.isDark) 0.14f else 0.08f),
+                        Color.Transparent
                     )
                 )
-                .border(1.dp, cachedAmbient.copy(alpha = if (colors.isDark) 0.28f else 0.18f), RoundedCornerShape(26.dp))
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            )
+            .border(1.dp, cachedAmbient.copy(alpha = if (colors.isDark) 0.28f else 0.18f), RoundedCornerShape(26.dp))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2204,7 +2448,6 @@ private fun TrackDetailsCardOverlay(
             }
         }
     }
-}
 
 /**
  * Lightweight popup dialog for sharing direct platform song link to external apps.

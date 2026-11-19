@@ -7,10 +7,17 @@ import androidx.lifecycle.viewModelScope
 import com.chandyou.tunelyx.audio.AudioPreviewEngine
 import com.chandyou.tunelyx.data.MusicApiService
 import com.chandyou.tunelyx.data.RecommendationEngine
+import com.chandyou.tunelyx.data.TasteProfileCalculator
 import com.chandyou.tunelyx.data.UserPreferencesRepository
 import com.chandyou.tunelyx.model.Genre
 import com.chandyou.tunelyx.model.GenreTrajectory
 import com.chandyou.tunelyx.model.GenreTrajectoryPoint
+import com.chandyou.tunelyx.model.GenreAffinityStat
+import com.chandyou.tunelyx.model.TopArtistStat
+import com.chandyou.tunelyx.model.ActiveDayStat
+import com.chandyou.tunelyx.model.UserTasteProfile
+import com.chandyou.tunelyx.model.extractPrimaryArtist
+import com.chandyou.tunelyx.model.HapticIntensity
 import com.chandyou.tunelyx.model.HistoryRecord
 import com.chandyou.tunelyx.model.MusicProvider
 import com.chandyou.tunelyx.model.SaveTarget
@@ -28,6 +35,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,7 +54,6 @@ enum class ActiveSubScreen {
     NONE,
     APPEARANCE,
     PLAYBACK,
-    SERVICES,
     FILTER_LIST,
     ABOUT
 }
@@ -116,6 +128,20 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
     private val _history = MutableStateFlow<Map<String, HistoryRecord>>(prefs.savedHistory)
     val history: StateFlow<Map<String, HistoryRecord>> = _history.asStateFlow()
 
+    // Asynchronous Cached Taste Profile (Evaluated off the main thread on Dispatchers.Default)
+    private val _tasteProfile = MutableStateFlow(
+        TasteProfileCalculator.computeTasteProfile(
+            historyRecords = prefs.savedHistory.values.toList(),
+            savedTracks = prefs.inAppSavedTracks,
+            totalSwipesCount = prefs.totalSwipesCount,
+            affinityMap = prefs.savedAffinityMap.ifEmpty {
+                Genre.entries.associateWith { if (prefs.selectedGenres.contains(it)) 65 else 35 }
+            },
+            selectedGenres = prefs.selectedGenres
+        )
+    )
+    val tasteProfile: StateFlow<UserTasteProfile> = _tasteProfile.asStateFlow()
+
     // Settings States (Persisted)
     private val _musicProvider = MutableStateFlow(prefs.musicProvider)
     val musicProvider: StateFlow<MusicProvider> = _musicProvider.asStateFlow()
@@ -131,6 +157,25 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
 
     private val _isImmersiveDockEnabled = MutableStateFlow(prefs.isImmersiveDockEnabled)
     val isImmersiveDockEnabled: StateFlow<Boolean> = _isImmersiveDockEnabled.asStateFlow()
+
+    private val _isDockShowLabelsEnabled = MutableStateFlow(prefs.isDockShowLabelsEnabled)
+    val isDockShowLabelsEnabled: StateFlow<Boolean> = _isDockShowLabelsEnabled.asStateFlow()
+
+    private val _shouldAnimateDeckEntrance = MutableStateFlow(true)
+    val shouldAnimateDeckEntrance: StateFlow<Boolean> = _shouldAnimateDeckEntrance.asStateFlow()
+
+    fun setDockShowLabelsEnabled(enabled: Boolean) {
+        _isDockShowLabelsEnabled.value = enabled
+        prefs.isDockShowLabelsEnabled = enabled
+    }
+
+    fun consumeDeckEntranceAnimation() {
+        _shouldAnimateDeckEntrance.value = false
+    }
+
+    fun triggerDeckEntranceAnimation() {
+        _shouldAnimateDeckEntrance.value = true
+    }
 
     // Shared Discover card drag & action bridge for external Adaptive Immersive Dock
     private val _deckDragDirection = MutableStateFlow<SwipeDirection?>(null)
@@ -192,12 +237,30 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
     private val _isHapticEnabled = MutableStateFlow(prefs.isHapticEnabled)
     val isHapticEnabled: StateFlow<Boolean> = _isHapticEnabled.asStateFlow()
 
+    private val _hapticIntensity = MutableStateFlow(prefs.hapticIntensity)
+    val hapticIntensity: StateFlow<HapticIntensity> = _hapticIntensity.asStateFlow()
+
     private val _libraryRevision = MutableStateFlow(0L)
     val libraryRevision: StateFlow<Long> = _libraryRevision.asStateFlow()
 
     fun setHapticEnabled(enabled: Boolean) {
         _isHapticEnabled.value = enabled
         prefs.isHapticEnabled = enabled
+    }
+
+    fun setHapticIntensity(intensity: HapticIntensity) {
+        _hapticIntensity.value = intensity
+        prefs.hapticIntensity = intensity
+    }
+
+    fun performHaptic(view: android.view.View, isStrong: Boolean = false) {
+        if (!_isHapticEnabled.value) return
+        val intensity = _hapticIntensity.value
+        val constant = when (intensity) {
+            HapticIntensity.LITE -> if (isStrong) android.view.HapticFeedbackConstants.KEYBOARD_TAP else android.view.HapticFeedbackConstants.CLOCK_TICK
+            HapticIntensity.NORMAL -> if (isStrong) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.KEYBOARD_TAP
+        }
+        view.performHapticFeedback(constant)
     }
 
     // Version filters (Remix, Acoustic, Diff Versions)
@@ -318,7 +381,7 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
     private val _canUndoLibraryRemoval = MutableStateFlow(false)
     val canUndoLibraryRemoval: StateFlow<Boolean> = _canUndoLibraryRemoval.asStateFlow()
 
-    // Trigger for re-editing preferences from Settings
+    // Trigger for re-editing preferences from onboarding/settings
     private val _isEditingPreferences = MutableStateFlow(false)
     val isEditingPreferences: StateFlow<Boolean> = _isEditingPreferences.asStateFlow()
 
@@ -399,13 +462,29 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
             _isLoadingDeck.value = false
         }
 
-        // Pre-warm the next card's audio stream once the current track is ready so card transitions feel instant
+        // Predictive multi-card prefetching: pre-resolves streams and pre-caches audio for upcoming cards into SimpleCache
         viewModelScope.launch {
             audioEngine.isAudioReady.collect { ready ->
                 if (ready) {
-                    val nextUpcoming = _activeDeck.value.getOrNull(_currentIndex.value + 1)
-                    audioEngine.prewarmTrack(nextUpcoming)
+                    val upcoming = _activeDeck.value.drop(_currentIndex.value + 1).take(3)
+                    audioEngine.prewarmTracks(upcoming)
                 }
+            }
+        }
+
+        // Off-thread Taste Profile computation: recomputes asynchronously on Dispatchers.Default when history/saved/affinity changes
+        viewModelScope.launch(Dispatchers.Default) {
+            combine(_history, _inAppSaved, _affinityMap) { historyMap, savedList, affinity ->
+                Triple(historyMap, savedList, affinity)
+            }.distinctUntilChanged().collectLatest { (historyMap, savedList, affinity) ->
+                val profile = TasteProfileCalculator.computeTasteProfile(
+                    historyRecords = historyMap.values.toList(),
+                    savedTracks = savedList,
+                    totalSwipesCount = prefs.totalSwipesCount,
+                    affinityMap = affinity,
+                    selectedGenres = prefs.selectedGenres
+                )
+                _tasteProfile.value = profile
             }
         }
 
@@ -607,6 +686,7 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
         rebuildDeckJob?.cancel()
         prefetchJob?.cancel()
         isPrefetching = false
+        _shouldAnimateDeckEntrance.value = true
         rebuildDeckJob = viewModelScope.launch {
             executeRebuildDeck()
         }
@@ -771,7 +851,6 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
         val currentTrack = currentTrack ?: return
         lastSwipedItem = SwipeHistoryItem(currentTrack, direction, _currentIndex.value)
         _canUndoSwipe.value = true
-        audioEngine.playSwipeSfx(direction)
 
         // Increment total swipes and record in bounded seen cache
         val newTotalSwipes = prefs.totalSwipesCount + 1
@@ -836,11 +915,13 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
         val nextTrack = _activeDeck.value.getOrNull(trimmedIndex)
         if (nextTrack != null) {
             audioEngine.playTrack(nextTrack)
+            val upcoming = _activeDeck.value.drop(trimmedIndex + 1).take(3)
+            audioEngine.prewarmTracks(upcoming)
         } else {
             audioEngine.stop()
         }
 
-        // Background preloading whenever fewer than 5 remaining tracks are loaded (or full rebuild when empty)
+        // Predictive replenishment whenever fewer than 8 remaining tracks are loaded
         val remainingTracks = _activeDeck.value.size - trimmedIndex
         if (remainingTracks <= 0 && !_isLoadingDeck.value) {
             rebuildDeck()
@@ -851,7 +932,7 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
 
     private fun ensurePrefetchIfNeeded() {
         val remainingTracks = _activeDeck.value.size - _currentIndex.value
-        if (remainingTracks in 1..5 && !_isLoadingDeck.value) {
+        if (remainingTracks in 1..8 && !_isLoadingDeck.value) {
             prefetchNextBatch()
         }
     }
@@ -940,27 +1021,70 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
     val thirdTrack: Track?
         get() = _activeDeck.value.getOrNull(_currentIndex.value + 2)
 
-    val likedTracks: List<Track>
-        get() = _history.value.values
-            .filter { it.action == SwipeDirection.LIKE || it.action == SwipeDirection.BOOKMARK_INAPP }
-            .sortedByDescending { it.timestamp }
-            .map { it.toTrack() }
-
-    val cooldownTracks: List<Track>
-        get() {
-            val now = System.currentTimeMillis()
-            val sevenDaysMs = 7 * 24 * 60 * 60 * 1000L
-            return _history.value.values
-                .filter { it.action == SwipeDirection.SKIP_NEUTRAL && (now - it.timestamp) < sevenDaysMs }
+    val libraryLiked: StateFlow<List<Track>> = _history
+        .map { hist ->
+            withContext(Dispatchers.Default) {
+                hist.values
+                    .filter { it.action == SwipeDirection.LIKE || it.action == SwipeDirection.BOOKMARK_INAPP }
+                    .sortedByDescending { it.timestamp }
+                    .map { it.toTrack() }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = prefs.savedHistory.values
+                .filter { it.action == SwipeDirection.LIKE || it.action == SwipeDirection.BOOKMARK_INAPP }
                 .sortedByDescending { it.timestamp }
                 .map { it.toTrack() }
+        )
+
+    val libraryCooldown: StateFlow<List<Track>> = _history
+        .map { hist ->
+            withContext(Dispatchers.Default) {
+                val now = System.currentTimeMillis()
+                val sevenDaysMs = 7 * 24 * 60 * 60 * 1000L
+                hist.values
+                    .filter { it.action == SwipeDirection.SKIP_NEUTRAL && (now - it.timestamp) < sevenDaysMs }
+                    .sortedByDescending { it.timestamp }
+                    .map { it.toTrack() }
+            }
         }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = prefs.savedHistory.values
+                .filter { it.action == SwipeDirection.SKIP_NEUTRAL && (System.currentTimeMillis() - it.timestamp) < 7 * 24 * 60 * 60 * 1000L }
+                .sortedByDescending { it.timestamp }
+                .map { it.toTrack() }
+        )
+
+    val libraryDisliked: StateFlow<List<Track>> = _history
+        .map { hist ->
+            withContext(Dispatchers.Default) {
+                hist.values
+                    .filter { it.action == SwipeDirection.DISLIKE }
+                    .sortedByDescending { it.timestamp }
+                    .map { it.toTrack() }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = prefs.savedHistory.values
+                .filter { it.action == SwipeDirection.DISLIKE }
+                .sortedByDescending { it.timestamp }
+                .map { it.toTrack() }
+        )
+
+    val likedTracks: List<Track>
+        get() = libraryLiked.value
+
+    val cooldownTracks: List<Track>
+        get() = libraryCooldown.value
 
     val dislikedTracks: List<Track>
-        get() = _history.value.values
-            .filter { it.action == SwipeDirection.DISLIKE }
-            .sortedByDescending { it.timestamp }
-            .map { it.toTrack() }
+        get() = libraryDisliked.value
 
     fun undoLastSwipe() {
         val last = lastSwipedItem ?: return
@@ -1367,6 +1491,7 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
         prefetchJob?.cancel()
         isPrefetching = false
         MusicApiService.clearAllCaches()
+        audioEngine.clearOfflineCache()
         _activeDeck.value = emptyList()
         _currentIndex.value = 0
         audioEngine.stop()
@@ -1420,6 +1545,7 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
         prefetchJob?.cancel()
         isPrefetching = false
         MusicApiService.clearAllCaches()
+        audioEngine.clearOfflineCache()
         _history.value = emptyMap()
         _inAppSaved.value = emptyList()
         val defaultAffinity = Genre.entries.associateWith { g ->
@@ -1452,58 +1578,24 @@ class DiscoverViewModel(application: Application) : AndroidViewModel(application
         return "Fresh discovery selected from ${track.provider.displayName} to diversify your musical taste."
     }
 
-    // Real Listening Statistics from actual swipe history timestamps
-    fun getGenreTrajectories(): List<GenreTrajectory> {
-        val trackedGenres = listOf(Genre.BOLLYWOOD, Genre.HIPHOP, Genre.INDIE, Genre.DANCE)
-        val historyRecords = _history.value.values.toList()
+    // Real Listening Statistics computed from actual SQLite swipe history
+    fun computeGenreStats(
+        historyRecords: List<HistoryRecord>,
+        affinityMap: Map<Genre, Int>
+    ): List<GenreAffinityStat> = TasteProfileCalculator.computeGenreStats(historyRecords, affinityMap)
 
-        // Generate 5 actual calendar day buckets (e.g. 4 days ago -> today)
-        val dayFormat = SimpleDateFormat("EEE", Locale.getDefault())
-        val dayBuckets = (4 downTo 0).map { daysAgo ->
-            val cal = Calendar.getInstance().apply {
-                add(Calendar.DAY_OF_YEAR, -daysAgo)
-                set(Calendar.HOUR_OF_DAY, 0)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }
-            val startOfDay = cal.timeInMillis
-            val endOfDay = startOfDay + 24 * 60 * 60 * 1000L - 1
-            val label = if (daysAgo == 0) "Today" else if (daysAgo == 1) "Yest" else dayFormat.format(Date(startOfDay))
-            Triple(label, startOfDay, endOfDay)
-        }
+    fun computeTopArtists(
+        historyRecords: List<HistoryRecord>,
+        savedTracks: List<Track>,
+        limit: Int = 5
+    ): List<TopArtistStat> = TasteProfileCalculator.computeTopArtists(historyRecords, savedTracks, limit)
 
-        return trackedGenres.map { genre ->
-            val liveScore = (_affinityMap.value[genre] ?: 40).coerceIn(10, 95)
-            val baselineScore = if (prefs.selectedGenres.contains(genre)) 58 else 38
+    fun computeActiveDays(historyRecords: List<HistoryRecord>): List<ActiveDayStat> =
+        TasteProfileCalculator.computeActiveDays(historyRecords)
 
-            // Smooth multi-day progression so individual 1-2 song swipes gently nudge trends
-            var runningScore = baselineScore
-            val points = dayBuckets.map { (label, start, end) ->
-                val dayRecords = historyRecords.filter { it.genre == genre && it.timestamp in start..end }
-                val dayPositives = dayRecords.count { it.action == SwipeDirection.LIKE || it.action == SwipeDirection.BOOKMARK_INAPP }
-                val dayNegatives = dayRecords.count { it.action == SwipeDirection.DISLIKE }
+    fun getGenreTrajectories(): List<GenreTrajectory> = _tasteProfile.value.trajectories
 
-                runningScore = (runningScore + (dayPositives * 3) - (dayNegatives * 3)).coerceIn(10, 95)
-                GenreTrajectoryPoint(label, runningScore)
-            }
-
-            val p0 = points.first().score
-            // Keep historical trend anchored smoothly to liveScore without sudden vertical jumps
-            val smoothedEnd = ((points.last().score + liveScore) / 2).coerceIn(10, 95)
-            val finalPoints = points.dropLast(1) + GenreTrajectoryPoint(dayBuckets.last().first, smoothedEnd)
-
-            val totalDelta = smoothedEnd - p0
-            val momentum = when {
-                totalDelta > 8 -> "Surging"
-                totalDelta > 2 -> "Rising"
-                totalDelta < -8 -> "Fading"
-                else -> "Steady"
-            }
-
-            GenreTrajectory(genre, finalPoints, totalDelta, momentum)
-        }
-    }
+    fun getUserTasteProfile(): UserTasteProfile = _tasteProfile.value
 
     override fun onCleared() {
         super.onCleared()

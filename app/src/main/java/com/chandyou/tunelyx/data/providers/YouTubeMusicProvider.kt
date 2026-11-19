@@ -21,6 +21,47 @@ data class YtmStreamResolution(
 
 /**
  * Dedicated YouTube Music provider handler backed by InnerTube search + on-demand cipher-free audio extraction.
+ *
+ * Real response payload reference schema (queried from https://music.youtube.com/youtubei/v1/search):
+ * ```json
+ * {
+ *   "musicResponsiveListItemRenderer": {
+ *     "trackingParams": "CMYDEOq_BRgAIhMIxKvJmeuJmAMVIBqDAx0QKCbP",
+ *     "thumbnail": {
+ *       "musicThumbnailRenderer": {
+ *         "thumbnail": {
+ *           "thumbnails": [
+ *             { "url": "https://yt3.googleusercontent.com/...=w120-h120-l90-rj", "width": 120, "height": 120 }
+ *           ]
+ *         }
+ *       }
+ *     },
+ *     "overlay": {
+ *       "musicItemThumbnailOverlayRenderer": {
+ *         "content": {
+ *           "musicPlayButtonRenderer": {
+ *             "playNavigationEndpoint": {
+ *               "watchEndpoint": { "videoId": "i1o1p_DD6TU" }
+ *             }
+ *           }
+ *         }
+ *       }
+ *     },
+ *     "flexColumns": [
+ *       {
+ *         "musicResponsiveListItemFlexColumnRenderer": {
+ *           "text": { "runs": [ { "text": "Gehra Hua (From \"Dhurandhar\")" } ] }
+ *         }
+ *       },
+ *       {
+ *         "musicResponsiveListItemFlexColumnRenderer": {
+ *           "text": { "runs": [ { "text": "Shashwat Sachdev" }, { "text": " • " }, { "text": "3:24" } ] }
+ *         }
+ *       }
+ *     ]
+ *   }
+ * }
+ * ```
  */
 object YouTubeMusicProvider : MusicProviderClient {
 
@@ -155,8 +196,9 @@ object YouTubeMusicProvider : MusicProviderClient {
     /**
      * Resolves a direct cipher-free audio stream URL for a YouTube Music [videoId] on Dispatchers.IO,
      * caching URLs briefly so swipe playback and pre-warming stay responsive.
+     * If InnerTube streaming is restricted or bot-gated, seamlessly resolves preview audio via cross-provider search.
      */
-    suspend fun resolveAudioStreamUrl(videoId: String): YtmStreamResolution = withContext(Dispatchers.IO) {
+    suspend fun resolveAudioStreamUrl(videoId: String, track: Track? = null): YtmStreamResolution = withContext(Dispatchers.IO) {
         getCachedStreamUrl(videoId)?.let { cached ->
             return@withContext YtmStreamResolution(streamUrl = cached)
         }
@@ -231,7 +273,76 @@ object YouTubeMusicProvider : MusicProviderClient {
             }
         }
 
+        // Cross-provider preview fallback: resolves official 30s preview stream if InnerTube is blocked or requires PO-token
+        if (track != null) {
+            val fallbackUrl = resolveCrossProviderPreview(track.title, track.artist, track.language)
+            if (!fallbackUrl.isNullOrBlank()) {
+                putCachedStreamUrl(videoId, fallbackUrl)
+                return@withContext YtmStreamResolution(streamUrl = fallbackUrl)
+            }
+        }
+
         YtmStreamResolution(errorMessage = lastErr ?: "YT Music audio stream unavailable for this track right now.")
+    }
+
+    /**
+     * Resolves an authentic 30-second preview stream across iTunes and JioSaavn for tracks
+     * where YouTube direct stream is gated by bot detection or unavailable.
+     */
+    suspend fun resolveCrossProviderPreview(title: String, artist: String, language: String? = null): String? = withContext(Dispatchers.IO) {
+        val cleanTitle = cleanTrackTitle(title)
+        val cleanArtist = artist.split(",").firstOrNull()?.trim() ?: artist
+        val cacheKey = "preview_cross::${cleanTitle.lowercase()}::${cleanArtist.lowercase()}"
+        getCachedStreamUrl(cacheKey)?.let { return@withContext it }
+
+        // 1. Apple iTunes preview (~150ms latency, zero authentication, official 30s m4a/aac previews)
+        try {
+            val country = if (language.equals("English", ignoreCase = true)) "US" else "IN"
+            val query = java.net.URLEncoder.encode("$cleanTitle $cleanArtist", "UTF-8")
+            val endpoint = "https://itunes.apple.com/search?term=$query&country=$country&media=music&entity=song&limit=3"
+            val res = ProviderHttpClient.getJson(endpoint, rateGuard = null, providerName = "Apple iTunes")
+            val results = res.json?.optJSONArray("results")
+            if (results != null) {
+                for (i in 0 until results.length()) {
+                    val item = results.optJSONObject(i) ?: continue
+                    val previewUrl = item.optString("previewUrl")
+                    if (previewUrl.startsWith("http")) {
+                        val normalized = ProviderNormalizer.normalizeHttpsUrl(previewUrl)
+                        if (normalized != null) {
+                            putCachedStreamUrl(cacheKey, normalized)
+                            return@withContext normalized
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 2. JioSaavn preview search (high coverage for Indian / Bollywood catalog)
+        try {
+            val query = java.net.URLEncoder.encode("$cleanTitle $cleanArtist", "UTF-8")
+            val endpoint = "https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=android&q=$query&n=3&p=1"
+            val res = ProviderHttpClient.getJson(endpoint, rateGuard = null, providerName = "JioSaavn")
+            val results = res.json?.optJSONArray("results")
+            if (results != null) {
+                for (i in 0 until results.length()) {
+                    val item = results.optJSONObject(i) ?: continue
+                    val moreInfo = item.optJSONObject("more_info")
+                    val vlink = moreInfo?.optString("vlink")?.takeIf { it.startsWith("http") }
+                    val encrypted = moreInfo?.optString("encrypted_media_url").orEmpty()
+                    val highQuality = if (encrypted.isNotEmpty()) JioSaavnProvider.decryptMediaUrl(encrypted, false) else null
+                    val chosen = highQuality ?: vlink
+                    if (chosen != null) {
+                        val normalized = ProviderNormalizer.normalizeHttpsUrl(chosen)
+                        if (normalized != null) {
+                            putCachedStreamUrl(cacheKey, normalized)
+                            return@withContext normalized
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        null
     }
 
     internal fun parseSearchResponse(
@@ -256,6 +367,11 @@ object YouTubeMusicProvider : MusicProviderClient {
                 runs = extractColumnRuns(flexCols.optJSONObject(1)),
                 fallbackLine = secondColText
             )
+
+            // Block compilations, "best of", jukeboxes, and long multi-track videos
+            if (isCompilationOrMixTrack(title, durationSec)) {
+                continue
+            }
 
             val separatedArtists = splitArtistNames(rawArtists, title)
             val displayArtist = separatedArtists.joinToString(", ")
@@ -373,6 +489,16 @@ object YouTubeMusicProvider : MusicProviderClient {
             }
             else -> 0
         }
+    }
+
+    private val COMPILATION_REGEX = Regex(
+        """(?i)\b(best\s*of|top\s*\d+|best\s*songs|famous\s*songs|jukebox|audio\s*jukebox|all\s*songs|mashup|mega\s*mix|collection|greatest\s*hits|non\s*stop|full\s*album)\b"""
+    )
+
+    fun isCompilationOrMixTrack(title: String, durationSec: Int): Boolean {
+        if (COMPILATION_REGEX.containsMatchIn(title)) return true
+        if (durationSec > 390) return true
+        return false
     }
 
     private fun collectResponsiveRenderers(node: Any?, out: MutableList<JSONObject>) {
@@ -521,7 +647,7 @@ object YouTubeMusicProvider : MusicProviderClient {
     }
 
     @Synchronized
-    private fun getCachedStreamUrl(videoId: String): String? {
+    fun getCachedStreamUrl(videoId: String): String? {
         val entry = streamCache[videoId] ?: return null
         if (System.currentTimeMillis() - entry.cachedAtMs > STREAM_TTL_MS) {
             streamCache.remove(videoId)

@@ -59,6 +59,7 @@ fun AppearanceScreen(
     val accentPreset by viewModel.accentPreset.collectAsState()
     val isImmersiveMode by viewModel.isImmersiveMode.collectAsState()
     val isImmersiveDockEnabled by viewModel.isImmersiveDockEnabled.collectAsState()
+    val isDockShowLabelsEnabled by viewModel.isDockShowLabelsEnabled.collectAsState()
 
     Column(
         modifier = modifier
@@ -262,15 +263,27 @@ fun AppearanceScreen(
                         label = "accentScale_${preset.name}"
                     )
 
+                    // In light mode, the white preset renders as sleek black (#18181B) to prevent being invisible on light cards
+                    val swatchColor = if (!isDarkTheme && preset == AccentColorPreset.WHITE) {
+                        Color(0xFF18181B)
+                    } else {
+                        preset.color
+                    }
+                    val swatchGlow = if (!isDarkTheme && preset == AccentColorPreset.WHITE) {
+                        Color(0x2818181B)
+                    } else {
+                        preset.glow
+                    }
+
                     Box(
                         modifier = Modifier
                             .size(46.dp)
                             .scale(scale)
                             .clip(CircleShape)
-                            .background(if (isSelected) preset.glow else Color.Transparent)
+                            .background(if (isSelected) swatchGlow else Color.Transparent)
                             .border(
                                 width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) preset.color else colors.borderSubtle,
+                                color = if (isSelected) swatchColor else colors.borderSubtle,
                                 shape = CircleShape
                             )
                             .clickable(
@@ -283,10 +296,71 @@ fun AppearanceScreen(
                             modifier = Modifier
                                 .size(24.dp)
                                 .clip(CircleShape)
-                                .background(preset.color)
-                        )
+                                .background(swatchColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                val dotColor = if (!isDarkTheme && preset == AccentColorPreset.WHITE) {
+                                    Color.White
+                                } else if (preset == AccentColorPreset.WHITE) {
+                                    Color.Black
+                                } else {
+                                    Color.White
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(dotColor)
+                                )
+                            }
+                        }
                     }
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 5. Bottom Navigation Style (Title and Icon vs Icon Only)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(colors.cardBg)
+                .border(1.dp, colors.borderSubtle, RoundedCornerShape(16.dp))
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "BOTTOM NAV STYLE",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.textSecondary,
+                letterSpacing = 0.8.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(CircleShape)
+                    .background(colors.bgSurfaceElevated)
+                    .border(1.dp, colors.borderSubtle, CircleShape)
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                AppearanceSegmentButton(
+                    text = "Title & Icon",
+                    isSelected = isDockShowLabelsEnabled,
+                    onClick = { viewModel.setDockShowLabelsEnabled(true) },
+                    modifier = Modifier.weight(1f)
+                )
+                AppearanceSegmentButton(
+                    text = "Icon Only",
+                    isSelected = !isDockShowLabelsEnabled,
+                    onClick = { viewModel.setDockShowLabelsEnabled(false) },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
 

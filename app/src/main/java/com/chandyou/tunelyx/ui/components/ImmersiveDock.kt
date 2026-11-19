@@ -49,6 +49,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +67,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -82,10 +84,19 @@ import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.chandyou.tunelyx.model.SwipeDirection
 import com.chandyou.tunelyx.model.Track
+import com.chandyou.tunelyx.ui.animations.DiscoverTabButton
+import com.chandyou.tunelyx.ui.animations.ElasticLikeButton
+import com.chandyou.tunelyx.ui.animations.LibraryTabButton
+import com.chandyou.tunelyx.ui.animations.LikePlayPauseMode
+import com.chandyou.tunelyx.ui.animations.MorphLikePlayPauseButton
+import com.chandyou.tunelyx.ui.animations.MorphPlayPauseButton
+import com.chandyou.tunelyx.ui.animations.MusicInteractionPalette
+import com.chandyou.tunelyx.ui.animations.YouTabButton
 import com.chandyou.tunelyx.ui.theme.ArtworkAmbientHelper
 import com.chandyou.tunelyx.ui.theme.SpotifyGreen
 import com.chandyou.tunelyx.ui.theme.TunelyxTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -107,8 +118,10 @@ fun ImmersiveDock(
     activeTrack: Track?,
     isPlaying: Boolean,
     hasActiveAudioSession: Boolean,
-    activeDragDirection: SwipeDirection?,
-    dragIntensity: Float,
+    activeDragDirection: SwipeDirection? = null,
+    dragIntensity: Float = 0f,
+    activeDragDirectionFlow: StateFlow<SwipeDirection?>? = null,
+    dragIntensityFlow: StateFlow<Float>? = null,
     canUndo: Boolean,
     isHapticEnabled: Boolean,
     onActionUndo: () -> Unit,
@@ -118,8 +131,11 @@ fun ImmersiveDock(
     onActionLike: () -> Unit,
     onResumeAudio: () -> Unit,
     onMiniPlayerTogglePlayPause: () -> Unit,
+    showLabels: Boolean = true,
     modifier: Modifier = Modifier
 ) {
+    val currentDragDirection = activeDragDirectionFlow?.collectAsState()?.value ?: activeDragDirection
+    val currentDragIntensity = dragIntensityFlow?.collectAsState()?.value ?: dragIntensity
     val colors = TunelyxTheme.colors
     val context = LocalContext.current
     val view = LocalView.current
@@ -129,7 +145,7 @@ fun ImmersiveDock(
 
     val upperMode = when {
         currentTab == MainTab.DISCOVER -> DockUpperMode.DISCOVER_ACTIONS
-        (currentTab == MainTab.LIBRARY || currentTab == MainTab.YOU) && activeTrack != null -> DockUpperMode.MINI_PLAYER
+        (currentTab == MainTab.LIBRARY || currentTab == MainTab.YOU) && activeTrack != null && isPlaying -> DockUpperMode.MINI_PLAYER
         else -> DockUpperMode.COLLAPSED
     }
 
@@ -228,9 +244,9 @@ fun ImmersiveDock(
                 bottomEnd = 18.dp
             )
             val trayBorderColor = if (colors.isDark) {
-                ambientColor.copy(alpha = 0.22f)
+                ambientColor.copy(alpha = 0.35f)
             } else {
-                Color(0x55FFFFFF)
+                Color(0x60FFFFFF)
             }
 
             Box(
@@ -238,7 +254,6 @@ fun ImmersiveDock(
                     .zIndex(1f)
                     .align(Alignment.BottomCenter)
                     .padding(bottom = trayBottomExtension)
-                    .clipToBounds()
                     .padding(top = 24.dp, start = 16.dp, end = 16.dp),
                 contentAlignment = Alignment.BottomCenter
             ) {
@@ -254,10 +269,10 @@ fun ImmersiveDock(
                             alpha = (traySheetProgress * 1.15f).coerceIn(0f, 1f)
                         }
                         .shadow(
-                            elevation = 12.dp,
+                            elevation = if (colors.isDark) 24.dp else 16.dp,
                             shape = trayShape,
-                            ambientColor = if (colors.isDark) ambientColor.copy(alpha = 0.20f) else Color(0x280F172A),
-                            spotColor = if (colors.isDark) Color(0x40000000) else Color(0x380F172A)
+                            ambientColor = if (colors.isDark) Color(0xA0000000) else Color(0x250F172A),
+                            spotColor = if (colors.isDark) Color(0xFF000000) else Color(0x400F172A)
                         )
                         .clip(trayShape)
                         .background(
@@ -268,7 +283,7 @@ fun ImmersiveDock(
                                 )
                             )
                         )
-                        .border(0.8.dp, trayBorderColor, trayShape)
+                        .border(1.dp, trayBorderColor, trayShape)
                         // Bottom 50.dp extends behind the overlapping 66.dp white nav capsule so outer sides merge cleanly
                         .padding(top = 6.dp, bottom = 50.dp, start = 14.dp, end = 14.dp)
                 ) {
@@ -285,20 +300,18 @@ fun ImmersiveDock(
                         colors.onAccent
                     }
 
-                    BoxWithConstraints(
+                    Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        val contentWidth = maxWidth
-
                         // 1. Outer 4 Discover Action Buttons (fade + shrink cleanly away as Like glides right, reverse on return)
                         val outerAlpha = (1f - playerMorph * 2.1f).coerceIn(0f, 1f)
                         val outerScale = 1f - 0.24f * (1f - outerAlpha)
                         if (outerAlpha > 0.01f) {
                             DiscoveryActionButtonRow(
                                 currentTrack = activeTrack,
-                                activeDragDirection = activeDragDirection,
-                                dragIntensity = dragIntensity,
+                                activeDragDirection = currentDragDirection,
+                                dragIntensity = currentDragIntensity,
                                 canUndo = canUndo,
                                 isPlaying = isPlaying,
                                 isHapticEnabled = isHapticEnabled,
@@ -344,19 +357,15 @@ fun ImmersiveDock(
 
                         // 3. Shared-Element Primary Green Circle (Glides smoothly Center 48.dp Like <-> Right 36.dp Play/Pause)
                         val buttonSize = lerp(48.dp, 36.dp, playerMorph)
-                        val centerLeftX = (contentWidth - 48.dp) / 2
-                        val rightLeftX = contentWidth - 36.dp
-                        val targetLeftX = lerp(centerLeftX, rightLeftX, playerMorph)
                         val iconSize = lerp(22.dp, 18.dp, playerMorph)
                         val isPlayerMode = playerMorph >= 0.5f
 
                         val interactionSource = remember { MutableInteractionSource() }
                         val isPressed by interactionSource.collectIsPressedAsState()
-                        var isHeartBeating by remember { mutableStateOf(false) }
 
-                        val isLikeDragActive = !isPlayerMode && activeDragDirection == SwipeDirection.LIKE
+                        val isLikeDragActive = !isPlayerMode && currentDragDirection == SwipeDirection.LIKE
                         val dragScale by animateFloatAsState(
-                            targetValue = if (isLikeDragActive) 1f + 0.22f * dragIntensity else 1.0f,
+                            targetValue = if (isLikeDragActive) 1f + 0.22f * currentDragIntensity else 1.0f,
                             animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
                             label = "sharedCircleDragScale"
                         )
@@ -365,16 +374,20 @@ fun ImmersiveDock(
                             animationSpec = if (reducedMotion) snap() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
                             label = "sharedCirclePressScale"
                         )
-                        val iconBeatScale by animateFloatAsState(
-                            targetValue = if (!isPlayerMode && (isLikeDragActive || isPressed || isHeartBeating)) 1.32f else 1.0f,
-                            animationSpec = if (reducedMotion) snap() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-                            label = "sharedCircleIconBeat"
-                        )
 
                         Box(
                             modifier = Modifier
                                 .align(Alignment.CenterStart)
-                                .offset { IntOffset(targetLeftX.toPx().roundToInt(), 0) }
+                                .layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    val containerWidth = constraints.maxWidth
+                                    val centerLeftX = (containerWidth - placeable.width) / 2f
+                                    val rightLeftX = (containerWidth - placeable.width).toFloat()
+                                    val targetX = (centerLeftX * (1f - playerMorph) + rightLeftX * playerMorph).roundToInt()
+                                    layout(placeable.width, placeable.height) {
+                                        placeable.placeRelative(targetX, 0)
+                                    }
+                                }
                                 .scale(dragScale * pressScale)
                                 .size(buttonSize)
                                 .shadow(
@@ -383,75 +396,47 @@ fun ImmersiveDock(
                                     spotColor = colors.accentGreenGlow
                                 )
                                 .clip(CircleShape)
-                                .background(likeBg)
-                                .clickable(
-                                    interactionSource = interactionSource,
-                                    indication = null,
-                                    onClick = {
-                                        if (isPlayerMode) {
-                                            if (isHapticEnabled) {
-                                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                            }
-                                            onMiniPlayerTogglePlayPause()
-                                        } else if (isPlaying || activeTrack == null) {
-                                            if (activeTrack != null) {
-                                                if (isHapticEnabled) {
-                                                    view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                                                }
-                                                scope.launch {
-                                                    isHeartBeating = true
-                                                    delay(170)
-                                                    isHeartBeating = false
-                                                    onActionLike()
-                                                }
-                                            }
-                                        } else {
-                                            if (isHapticEnabled) {
-                                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                                            }
-                                            onResumeAudio()
-                                        }
-                                    }
-                                ),
+                                .background(likeBg),
                             contentAlignment = Alignment.Center
                         ) {
-                            val iconState = if (isPlayerMode) {
-                                if (isPlaying && hasActiveAudioSession) "PAUSE" else "PLAY_MINI"
+                            val currentMode = if (isPlayerMode) {
+                                if (isPlaying && hasActiveAudioSession) LikePlayPauseMode.PAUSE else LikePlayPauseMode.PLAY
                             } else {
-                                if (isPlaying || activeTrack == null) "HEART" else "PLAY_RESUME"
+                                LikePlayPauseMode.HEART
                             }
 
-                            AnimatedContent(
-                                targetState = iconState,
-                                transitionSpec = {
-                                    if (reducedMotion) {
-                                        fadeIn(snap()) togetherWith fadeOut(snap())
+                            MorphLikePlayPauseButton(
+                                mode = currentMode,
+                                isLiked = isLikeDragActive,
+                                onClick = {
+                                    if (isPlayerMode) {
+                                        if (isHapticEnabled) {
+                                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                        }
+                                        onMiniPlayerTogglePlayPause()
+                                    } else if (isPlaying || activeTrack == null) {
+                                        if (activeTrack != null) {
+                                            if (isHapticEnabled) {
+                                                view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                                            }
+                                            onActionLike()
+                                        }
                                     } else {
-                                        (fadeIn(tween(170)) + scaleIn(initialScale = 0.68f))
-                                            .togetherWith(fadeOut(tween(120)) + scaleOut(targetScale = 0.68f))
+                                        if (isHapticEnabled) {
+                                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                        }
+                                        onResumeAudio()
                                     }
                                 },
-                                label = "sharedCircleIconMorph"
-                            ) { state ->
-                                val vector = when (state) {
-                                    "PAUSE" -> Icons.Rounded.Pause
-                                    "HEART" -> Icons.Rounded.Favorite
-                                    else -> Icons.Rounded.PlayArrow
-                                }
-                                val desc = when (state) {
-                                    "PAUSE" -> "Pause"
-                                    "HEART" -> "Like Track"
-                                    else -> "Play"
-                                }
-                                Icon(
-                                    imageVector = vector,
-                                    contentDescription = desc,
-                                    tint = likeContent,
-                                    modifier = Modifier
-                                        .size(iconSize)
-                                        .scale(iconBeatScale)
+                                touchSize = buttonSize,
+                                iconSize = iconSize,
+                                palette = MusicInteractionPalette(
+                                    active = likeContent,
+                                    inactive = likeContent,
+                                    ripple = colors.accentGreenGlow,
+                                    cutoutContrast = colors.bgBase
                                 )
-                            }
+                            )
                         }
                     }
                 }
@@ -494,10 +479,10 @@ fun ImmersiveDock(
                     .fillMaxWidth()
                     .height(navHeight)
                     .shadow(
-                        elevation = if (colors.isDark) 12.dp else 10.dp,
+                        elevation = if (colors.isDark) 20.dp else 14.dp,
                         shape = lowerShape,
-                        ambientColor = Color(0x24000000),
-                        spotColor = Color(0x2E000000)
+                        ambientColor = if (colors.isDark) Color(0xA0000000) else Color(0x25000000),
+                        spotColor = if (colors.isDark) Color(0xFF000000) else Color(0x40000000)
                     )
                     .clip(lowerShape)
                     .background(lowerSurfaceColor)
@@ -533,9 +518,10 @@ fun ImmersiveDock(
                 Row(modifier = Modifier.fillMaxSize()) {
                     ImmersiveNavItem(
                         label = "Discover",
-                        icon = Icons.Default.Explore,
+                        tab = MainTab.DISCOVER,
                         isSelected = currentTab == MainTab.DISCOVER,
                         isDark = colors.isDark,
+                        showLabels = showLabels,
                         activeIconTint = activeNavIconTint,
                         activeLabelTint = activeNavLabelTint,
                         modifier = Modifier.weight(1f),
@@ -543,9 +529,10 @@ fun ImmersiveDock(
                     )
                     ImmersiveNavItem(
                         label = "Library",
-                        icon = Icons.AutoMirrored.Filled.QueueMusic,
+                        tab = MainTab.LIBRARY,
                         isSelected = currentTab == MainTab.LIBRARY,
                         isDark = colors.isDark,
+                        showLabels = showLabels,
                         activeIconTint = activeNavIconTint,
                         activeLabelTint = activeNavLabelTint,
                         modifier = Modifier.weight(1f),
@@ -553,9 +540,10 @@ fun ImmersiveDock(
                     )
                     ImmersiveNavItem(
                         label = "You",
-                        icon = Icons.Default.Person,
+                        tab = MainTab.YOU,
                         isSelected = currentTab == MainTab.YOU,
                         isDark = colors.isDark,
+                        showLabels = showLabels,
                         activeIconTint = activeNavIconTint,
                         activeLabelTint = activeNavLabelTint,
                         modifier = Modifier.weight(1f),
@@ -639,15 +627,18 @@ private fun ImmersiveMiniPlayerMeta(
 @Composable
 private fun ImmersiveNavItem(
     label: String,
-    icon: ImageVector,
+    tab: MainTab,
     isSelected: Boolean,
     isDark: Boolean,
+    showLabels: Boolean = true,
     activeIconTint: Color,
     activeLabelTint: Color,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val inactiveTint = if (isDark) Color(0xFF9CA3AF) else Color(0xFF3E4A59)
+    val navIconSize = if (showLabels) 23.dp else 25.dp
+    val navTouchSize = if (showLabels) 25.dp else 30.dp
 
     Box(
         modifier = modifier
@@ -664,20 +655,58 @@ private fun ImmersiveNavItem(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (isSelected) activeIconTint else inactiveTint,
-                modifier = Modifier.size(21.dp)
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                fontSize = 11.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (isSelected) activeLabelTint else inactiveTint,
-                maxLines = 1
-            )
+            when (tab) {
+                MainTab.DISCOVER -> {
+                    DiscoverTabButton(
+                        selected = isSelected,
+                        onClick = onClick,
+                        touchSize = navTouchSize,
+                        iconSize = navIconSize,
+                        palette = MusicInteractionPalette(
+                            active = activeIconTint,
+                            inactive = inactiveTint,
+                            ripple = activeIconTint.copy(alpha = 0.25f),
+                            sparkle = activeIconTint
+                        )
+                    )
+                }
+                MainTab.LIBRARY -> {
+                    LibraryTabButton(
+                        selected = isSelected,
+                        onClick = onClick,
+                        touchSize = navTouchSize,
+                        iconSize = navIconSize,
+                        palette = MusicInteractionPalette(
+                            active = activeIconTint,
+                            inactive = inactiveTint,
+                            ripple = activeIconTint.copy(alpha = 0.25f)
+                        )
+                    )
+                }
+                MainTab.YOU -> {
+                    YouTabButton(
+                        selected = isSelected,
+                        onClick = onClick,
+                        touchSize = navTouchSize,
+                        iconSize = navIconSize,
+                        palette = MusicInteractionPalette(
+                            active = activeIconTint,
+                            inactive = inactiveTint,
+                            ripple = activeIconTint.copy(alpha = 0.25f),
+                            sparkle = activeIconTint
+                        )
+                    )
+                }
+            }
+            if (showLabels) {
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isSelected) activeLabelTint else inactiveTint,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

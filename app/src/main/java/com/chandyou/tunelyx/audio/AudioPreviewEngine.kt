@@ -1,33 +1,77 @@
 ﻿package com.chandyou.tunelyx.audio
 
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.chandyou.tunelyx.data.providers.YouTubeMusicProvider
 import com.chandyou.tunelyx.model.SwipeDirection
 import com.chandyou.tunelyx.model.Track
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Collections
 import kotlin.math.ceil
+
+object AudioCacheManager {
+    private const val CACHE_MAX_BYTES = 120 * 1024 * 1024L // 120 MB LRU offline audio cache
+    @Volatile
+    private var simpleCache: SimpleCache? = null
+
+    @Synchronized
+    fun getCache(context: Context): SimpleCache {
+        return simpleCache ?: run {
+            val cacheFolder = File(context.applicationContext.cacheDir, "tunelyx_audio_cache")
+            if (!cacheFolder.exists()) {
+                cacheFolder.mkdirs()
+            }
+            val evictor = LeastRecentlyUsedCacheEvictor(CACHE_MAX_BYTES)
+            val databaseProvider = StandaloneDatabaseProvider(context.applicationContext)
+            SimpleCache(cacheFolder, evictor, databaseProvider).also {
+                simpleCache = it
+            }
+        }
+    }
+
+    @Synchronized
+    fun clearCache() {
+        simpleCache?.let { cache ->
+            try {
+                val keys = cache.keys.toList()
+                for (key in keys) {
+                    try {
+                        cache.removeResource(key)
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+        }
+    }
+}
 
 class AudioPreviewEngine(private val context: Context) {
 
@@ -40,8 +84,11 @@ class AudioPreviewEngine(private val context: Context) {
     private var slowBufferingJob: Job? = null
     private var prewarmJob: Job? = null
     private var streamLoadJob: Job? = null
-    private val warmedUrls = LinkedHashSet<String>()
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private var hasAttemptedFallback = false
+    private val warmedUrls = Collections.synchronizedSet(LinkedHashSet<String>())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + CoroutineExceptionHandler { _, throwable ->
+        android.util.Log.e("AudioPreviewEngine", "Silent coroutine error in audio engine", throwable)
+    })
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -139,8 +186,14 @@ class AudioPreviewEngine(private val context: Context) {
             }
         }
 
+        val audioCache = AudioCacheManager.getCache(context)
+        val cacheDataSourceFactory = CacheDataSource.Factory()
+            .setCache(audioCache)
+            .setUpstreamDataSourceFactory(routingDataSourceFactory)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
-            .setDataSourceFactory(routingDataSourceFactory)
+            .setDataSourceFactory(cacheDataSourceFactory)
 
         exoPlayer = ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
@@ -192,6 +245,27 @@ class AudioPreviewEngine(private val context: Context) {
 
                     override fun onPlayerError(error: PlaybackException) {
                         slowBufferingJob?.cancel()
+                        val track = _currentTrack.value
+                        if (track != null && track.provider == com.chandyou.tunelyx.model.MusicProvider.YOUTUBE_MUSIC && !hasAttemptedFallback) {
+                            hasAttemptedFallback = true
+                            streamLoadJob?.cancel()
+                            streamLoadJob = scope.launch {
+                                try {
+                                    val fallback = YouTubeMusicProvider.resolveCrossProviderPreview(track.title, track.artist, track.language)
+                                    if (!fallback.isNullOrBlank() && _currentTrack.value?.id == track.id) {
+                                        _streamingError.value = null
+                                        startExoPlayerWithUri(track, fallback)
+                                        return@launch
+                                    }
+                                    _streamingError.value = "Audio preview unavailable on YouTube Music."
+                                    _isPlaying.value = false
+                                } catch (_: Exception) {
+                                    _streamingError.value = "Audio preview unavailable on YouTube Music."
+                                    _isPlaying.value = false
+                                }
+                            }
+                            return
+                        }
                         val message = when (error.errorCode) {
                             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ->
                                 "No internet or audio server unreachable."
@@ -216,6 +290,7 @@ class AudioPreviewEngine(private val context: Context) {
         progressTrackingJob?.cancel()
         slowBufferingJob?.cancel()
         streamLoadJob?.cancel()
+        hasAttemptedFallback = false
         _currentTrack.value = track
         _streamingError.value = null
         _networkWarning.value = null
@@ -249,13 +324,25 @@ class AudioPreviewEngine(private val context: Context) {
                 return
             }
             streamLoadJob = scope.launch {
-                val res = YouTubeMusicProvider.resolveAudioStreamUrl(videoId)
-                if (_currentTrack.value?.id != track.id) return@launch
-                if (!res.streamUrl.isNullOrBlank()) {
-                    startExoPlayerWithUri(track, res.streamUrl)
-                } else {
-                    _streamingError.value = res.errorMessage ?: "Unable to stream ${track.title} from YT Music."
-                    _isPlaying.value = false
+                try {
+                    val res = YouTubeMusicProvider.resolveAudioStreamUrl(videoId, track)
+                    if (_currentTrack.value?.id != track.id) return@launch
+                    if (!res.streamUrl.isNullOrBlank()) {
+                        startExoPlayerWithUri(track, res.streamUrl)
+                    } else {
+                        val fallback = YouTubeMusicProvider.resolveCrossProviderPreview(track.title, track.artist, track.language)
+                        if (!fallback.isNullOrBlank() && _currentTrack.value?.id == track.id) {
+                            startExoPlayerWithUri(track, fallback)
+                        } else {
+                            _streamingError.value = res.errorMessage ?: "Unable to stream ${track.title} from YT Music."
+                            _isPlaying.value = false
+                        }
+                    }
+                } catch (_: Exception) {
+                    if (_currentTrack.value?.id == track.id) {
+                        _streamingError.value = "Unable to stream ${track.title}."
+                        _isPlaying.value = false
+                    }
                 }
             }
         } else {
@@ -302,50 +389,97 @@ class AudioPreviewEngine(private val context: Context) {
     }
 
     /**
-     * Pre-warms DNS/TLS/CDN edge connection and initial audio bytes for the upcoming card
-     * on IO after the active track starts playing, reducing next-card audio startup delay.
+     * Predictive deck prefetching: pre-resolves stream URLs and pre-caches the initial
+     * audio bytes into Media3 SimpleCache for up to 3 upcoming cards off the main thread.
+     * Note: YouTube Music tracks are only prewarmed if their stream URL is already cached
+     * to avoid consuming InnerTube rate-limit slots on background cards.
      */
-    fun prewarmTrack(track: Track?) {
-        val rawUrl = track?.previewUrl ?: return
+    fun prewarmTracks(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
         prewarmJob?.cancel()
         prewarmJob = scope.launch(Dispatchers.IO) {
-            val urlString = if (YouTubeMusicProvider.isYtmPreviewUri(rawUrl)) {
-                val vid = YouTubeMusicProvider.extractVideoId(rawUrl) ?: return@launch
-                YouTubeMusicProvider.resolveAudioStreamUrl(vid).streamUrl ?: return@launch
-            } else {
-                rawUrl
-            }
-            if (!urlString.startsWith("https://")) return@launch
-            if (!warmedUrls.add(urlString)) return@launch
-            if (warmedUrls.size > 40) {
-                warmedUrls.iterator().let { if (it.hasNext()) { it.next(); it.remove() } }
-            }
-            var connection: HttpURLConnection? = null
             try {
-                connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 2500
-                    readTimeout = 2500
-                    requestMethod = "GET"
-                    if (urlString.contains("googlevideo.com") || urlString.contains("youtube.com")) {
-                        setRequestProperty("User-Agent", YouTubeMusicProvider.YTM_STREAM_USER_AGENT)
+                val audioCache = AudioCacheManager.getCache(context)
+                for (track in tracks.take(3)) {
+                    if (!isActive) break
+                    val rawUrl = track.previewUrl ?: continue
+                    val resolvedUrl = if (YouTubeMusicProvider.isYtmPreviewUri(rawUrl)) {
+                        val vid = YouTubeMusicProvider.extractVideoId(rawUrl) ?: continue
+                        YouTubeMusicProvider.getCachedStreamUrl(vid) ?: continue
+                    } else {
+                        rawUrl
                     }
-                    setRequestProperty("Range", "bytes=0-32767")
-                }
-                if (connection.responseCode in 200..299) {
-                    val buf = ByteArray(4096)
-                    connection.inputStream.use { stream ->
-                        while (isActive && stream.read(buf) != -1) {
-                            // Pull first chunk into network/OS buffer
-                            break
+                    if (!resolvedUrl.startsWith("https://")) continue
+                    if (!warmedUrls.add(resolvedUrl)) continue
+                    if (warmedUrls.size > 50) {
+                        try {
+                            synchronized(warmedUrls) {
+                                val it = warmedUrls.iterator()
+                                if (it.hasNext()) { it.next(); it.remove() }
+                            }
+                        } catch (_: Exception) {}
+                    }
+
+                    // Pre-buffer initial audio segment directly into Media3 SimpleCache
+                    var cacheSource: DataSource? = null
+                    try {
+                        val dataSpec = DataSpec.Builder()
+                            .setUri(Uri.parse(resolvedUrl))
+                            .setLength(131072L) // 128 KB initial buffer for instant 0ms start
+                            .build()
+
+                        val ytmSource = DefaultHttpDataSource.Factory()
+                            .setUserAgent(YouTubeMusicProvider.YTM_STREAM_USER_AGENT)
+                            .setAllowCrossProtocolRedirects(true)
+                            .setConnectTimeoutMs(4000)
+                            .setReadTimeoutMs(5000)
+
+                        val defaultSource = DefaultHttpDataSource.Factory()
+                            .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                            .setAllowCrossProtocolRedirects(true)
+                            .setConnectTimeoutMs(4000)
+                            .setReadTimeoutMs(5000)
+
+                        val upstream = if (resolvedUrl.contains("googlevideo.com") || resolvedUrl.contains("youtube.com")) {
+                            ytmSource
+                        } else {
+                            defaultSource
                         }
+
+                        val cacheSourceInstance = CacheDataSource.Factory()
+                            .setCache(audioCache)
+                            .setUpstreamDataSourceFactory(upstream)
+                            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                            .createDataSource()
+                        cacheSource = cacheSourceInstance
+
+                        cacheSourceInstance.open(dataSpec)
+                        val buf = ByteArray(8192)
+                        var bytesRead = 0
+                        while (isActive && bytesRead < 131072) {
+                            val read = cacheSourceInstance.read(buf, 0, buf.size)
+                            if (read == C.RESULT_END_OF_INPUT || read <= 0) break
+                            bytesRead += read
+                        }
+                    } catch (_: Exception) {
+                        // Best-effort predictive audio cache fill
+                    } finally {
+                        try { cacheSource?.close() } catch (_: Exception) {}
                     }
                 }
-            } catch (_: Exception) {
-                // Best-effort network warm-up
-            } finally {
-                connection?.disconnect()
-            }
+            } catch (_: Exception) {}
         }
+    }
+
+    fun prewarmTrack(track: Track?) {
+        if (track != null) {
+            prewarmTracks(listOf(track))
+        }
+    }
+
+    fun clearOfflineCache() {
+        AudioCacheManager.clearCache()
+        warmedUrls.clear()
     }
 
     fun togglePlayPause() {
@@ -416,11 +550,6 @@ class AudioPreviewEngine(private val context: Context) {
                 }
             }
         }
-    }
-
-    // Button sound effects disabled
-    fun playSwipeSfx(direction: SwipeDirection) {
-        // Silent
     }
 
     fun release() {

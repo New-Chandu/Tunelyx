@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.chandyou.tunelyx.model.ArtistAffinity
 import com.chandyou.tunelyx.model.Genre
+import com.chandyou.tunelyx.model.HapticIntensity
 import com.chandyou.tunelyx.model.HistoryRecord
 import com.chandyou.tunelyx.model.Mood
 import com.chandyou.tunelyx.model.MusicProvider
@@ -38,6 +39,7 @@ class UserPreferencesRepository(context: Context) : UserPreferencesProvider {
         private const val KEY_MUSIC_PROVIDER = "key_music_provider"
         private const val KEY_IMMERSIVE_MODE = "key_immersive_mode"
         private const val KEY_IMMERSIVE_DOCK = "key_immersive_dock"
+        private const val KEY_DOCK_SHOW_LABELS = "key_dock_show_labels"
         private const val KEY_SAVE_TARGET = "key_save_target"
         private const val KEY_TOTAL_SWIPES = "key_total_swipes"
         private const val KEY_AFFINITY_MAP = "key_affinity_map"
@@ -199,11 +201,11 @@ class UserPreferencesRepository(context: Context) : UserPreferencesProvider {
 
     var accentPreset: AccentColorPreset
         get() {
-            val name = prefs.getString(KEY_ACCENT_PRESET, AccentColorPreset.GREEN.name)
+            val name = prefs.getString(KEY_ACCENT_PRESET, AccentColorPreset.WHITE.name)
             return try {
-                AccentColorPreset.valueOf(name ?: AccentColorPreset.GREEN.name)
+                AccentColorPreset.valueOf(name ?: AccentColorPreset.WHITE.name)
             } catch (e: Exception) {
-                AccentColorPreset.GREEN
+                AccentColorPreset.WHITE
             }
         }
         set(value) = prefs.edit().putString(KEY_ACCENT_PRESET, value.name).apply()
@@ -224,8 +226,12 @@ class UserPreferencesRepository(context: Context) : UserPreferencesProvider {
         set(value) = prefs.edit().putBoolean(KEY_IMMERSIVE_MODE, value).apply()
 
     var isImmersiveDockEnabled: Boolean
-        get() = prefs.getBoolean(KEY_IMMERSIVE_DOCK, false)
+        get() = prefs.getBoolean(KEY_IMMERSIVE_DOCK, true)
         set(value) = prefs.edit().putBoolean(KEY_IMMERSIVE_DOCK, value).apply()
+
+    var isDockShowLabelsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DOCK_SHOW_LABELS, true)
+        set(value) = prefs.edit().putBoolean(KEY_DOCK_SHOW_LABELS, value).apply()
 
     var isAutoUpdateCheckEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_UPDATE_CHECK, true)
@@ -357,6 +363,17 @@ class UserPreferencesRepository(context: Context) : UserPreferencesProvider {
     var isHapticEnabled: Boolean
         get() = prefs.getBoolean("key_haptic_enabled", true)
         set(value) = prefs.edit().putBoolean("key_haptic_enabled", value).apply()
+
+    var hapticIntensity: HapticIntensity
+        get() {
+            val name = prefs.getString("key_haptic_intensity", HapticIntensity.LITE.name)
+            return try {
+                HapticIntensity.valueOf(name ?: HapticIntensity.LITE.name)
+            } catch (e: Exception) {
+                HapticIntensity.LITE
+            }
+        }
+        set(value) = prefs.edit().putString("key_haptic_intensity", value.name).apply()
 
     fun clearAllData() {
         dbHelper.clearHistory()

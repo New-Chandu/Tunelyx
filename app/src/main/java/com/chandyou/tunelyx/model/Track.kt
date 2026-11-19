@@ -33,9 +33,20 @@ enum class SaveTarget(val displayName: String, val subtitle: String) {
     BOOKMARKS("Bookmarks", "Saved to your Bookmarked collection")
 }
 
+enum class HapticIntensity(val displayName: String, val level: Int) {
+    LITE("Lite", 1),
+    NORMAL("Normal", 2);
+
+    companion object {
+        fun fromLevel(level: Int): HapticIntensity = when (level) {
+            1 -> LITE
+            else -> NORMAL
+        }
+    }
+}
+
 enum class MusicProvider(val displayName: String, val description: String, val badge: String) {
     JIOSAAVN("JioSaavn", "Deep Bollywood, Hindi Indie, Punjabi & Desi Hip Hop", "Best for Hindi"),
-    DEEZER("Deezer", "Official 30s MP3 preview clips & Global Hits", "Global & Hits"),
     ITUNES("iTunes", "Official 30s AAC preview clips & Global Catalog", "Apple Preview"),
     YOUTUBE_MUSIC("YT Music", "Official & indie tracks from YouTube Music", "Broad Catalog");
 
@@ -50,13 +61,8 @@ enum class MusicProvider(val displayName: String, val description: String, val b
                 Genre.BOLLYWOOD, Genre.HIPHOP, Genre.DANCE,
                 Genre.PUNJABI, Genre.ACOUSTIC, Genre.INDIE, Genre.RETRO
             )
-            DEEZER -> listOf(
-                Genre.DANCE, Genre.HIPHOP, Genre.INDIE,
-                Genre.ACOUSTIC, Genre.BOLLYWOOD, Genre.PUNJABI
-            )
             ITUNES -> listOf(
-                Genre.BOLLYWOOD, Genre.HIPHOP, Genre.DANCE,
-                Genre.PUNJABI, Genre.ACOUSTIC
+                Genre.BOLLYWOOD, Genre.HIPHOP, Genre.DANCE, Genre.PUNJABI
             )
             YOUTUBE_MUSIC -> listOf(
                 Genre.BOLLYWOOD, Genre.HIPHOP, Genre.DANCE,
@@ -129,9 +135,6 @@ data class Track(
             MusicProvider.YOUTUBE_MUSIC -> {
                 val vid = id.removePrefix("yt_")
                 "https://music.youtube.com/watch?v=$vid"
-            }
-            MusicProvider.DEEZER -> {
-                "https://www.deezer.com/track/$id"
             }
             MusicProvider.ITUNES -> {
                 val encoded = java.net.URLEncoder.encode("$title $artist", "UTF-8")
@@ -352,4 +355,36 @@ data class ArtistAffinity(
     val dislikeCount: Int = 0,
     val lastInteractionTime: Long = 0L,
     val isSuppressed: Boolean = false
+)
+
+data class GenreAffinityStat(
+    val genre: Genre,
+    val affirmativeCount: Int,
+    val totalInteractions: Int,
+    val percentage: Float,
+    val affinityScore: Int
+)
+
+data class TopArtistStat(
+    val artistName: String,
+    val likesCount: Int,
+    val totalInteractions: Int,
+    val affirmativePercentage: Int
+)
+
+data class ActiveDayStat(
+    val dateLabel: String,
+    val timestamp: Long,
+    val totalSwipes: Int,
+    val savedCount: Int
+)
+
+data class UserTasteProfile(
+    val totalSongsExplored: Int,
+    val totalSongsSaved: Int,
+    val discoveryRatePercentage: Int,
+    val topGenres: List<GenreAffinityStat>,
+    val topArtists: List<TopArtistStat>,
+    val activeDays: List<ActiveDayStat>,
+    val trajectories: List<GenreTrajectory>
 )

@@ -8,6 +8,7 @@ import com.chandyou.tunelyx.model.SongFingerprint
 import com.chandyou.tunelyx.model.SwipeDirection
 import com.chandyou.tunelyx.model.Track
 import com.chandyou.tunelyx.model.extractPrimaryArtist
+import com.chandyou.tunelyx.data.providers.ProviderNormalizer
 import kotlin.random.Random
 
 class RecommendationEngine(
@@ -120,22 +121,37 @@ class RecommendationEngine(
         }
 
         // Hard Filter 0.1: Strict Audio Language Verification
-        // JioSaavn supplies explicit native language tags (enforce non-blank);
-        // Deezer & iTunes omit explicit language tags so unknown (null) tracks from targeted queries pass with mild priority offset.
+        // JioSaavn supplies explicit native language tags (enforce non-blank)
+        if (track.provider == MusicProvider.JIOSAAVN && track.language.isNullOrBlank()) {
+            return -9999.0
+        }
+
+        val userWantsEnglish = selectedLanguages.any { it.equals("English", ignoreCase = true) }
+        val resolvedLang = track.language?.takeIf { it.isNotBlank() }
+            ?: ProviderNormalizer.detectTrackLanguage(null, track.title, track.artist, track.album.orEmpty())
+
         if (selectedLanguages.isNotEmpty()) {
-            if (track.language.isNullOrBlank()) {
-                if (track.provider == MusicProvider.JIOSAAVN) {
-                    return -9999.0
-                }
-            } else {
-                val matchesLanguage = selectedLanguages.any { it.equals(track.language, ignoreCase = true) }
+            if (resolvedLang != null) {
+                val matchesLanguage = selectedLanguages.any { it.equals(resolvedLang, ignoreCase = true) }
                 if (!matchesLanguage) {
                     return -9999.0
                 }
-                val userWantsEnglish = selectedLanguages.any { it.equals("English", ignoreCase = true) }
-                if (!userWantsEnglish && track.language.equals("English", ignoreCase = true)) {
+                if (!userWantsEnglish && resolvedLang.equals("English", ignoreCase = true)) {
                     return -9999.0
                 }
+            } else if (track.provider == MusicProvider.JIOSAAVN) {
+                return -9999.0
+            }
+        }
+
+        // Hard Filter 0.2: Genre integrity (Bollywood never admits English pop; Party & Dance never admits sad songs)
+        if (track.genre == Genre.BOLLYWOOD && resolvedLang.equals("English", ignoreCase = true)) {
+            return -9999.0
+        }
+        if (track.genre == Genre.DANCE) {
+            val textToCheck = "${track.title} ${track.artist} ${track.album.orEmpty()}".lowercase()
+            if (ProviderNormalizer.SAD_OR_SLOW_KEYWORDS.any { textToCheck.contains(it) }) {
+                return -9999.0
             }
         }
 
@@ -206,7 +222,7 @@ class RecommendationEngine(
         }
         val noveltyGradient = (noveltyBonus / 0.30).coerceIn(0.0, 1.0)
 
-        // Feature 4: Provider Diversity Bonus (10% weight) - Encourages variety across JioSaavn, Deezer, iTunes, YTM
+        // Feature 4: Provider Diversity Bonus (10% weight) - Encourages variety across JioSaavn, iTunes, YTM
         val candidateProvider = track.provider
         val providerDiversity: Double = if (alreadySelectedArtists.isNotEmpty()) {
             val providerCounts = alreadySelectedArtists.count { entry ->
@@ -263,15 +279,29 @@ class RecommendationEngine(
             if (prefs.blockedArtists.any { it.equals(track.artist.trim(), ignoreCase = true) || it.equals(primary, ignoreCase = true) }) {
                 return@filter false
             }
+            if (track.provider == MusicProvider.JIOSAAVN && track.language.isNullOrBlank()) {
+                return@filter false
+            }
+            val userWantsEnglish = selectedLanguages.any { it.equals("English", ignoreCase = true) }
+            val resolvedLang = track.language?.takeIf { it.isNotBlank() }
+                ?: ProviderNormalizer.detectTrackLanguage(null, track.title, track.artist, track.album.orEmpty())
+
             if (selectedLanguages.isNotEmpty()) {
-                val userWantsEnglish = selectedLanguages.any { it.equals("English", ignoreCase = true) }
-                val lang = track.language?.trim()
-                if (lang.isNullOrBlank()) {
-                    if (track.provider == MusicProvider.JIOSAAVN) return@filter false
-                } else {
-                    val matches = selectedLanguages.any { it.equals(lang, ignoreCase = true) }
+                if (resolvedLang != null) {
+                    val matches = selectedLanguages.any { it.equals(resolvedLang, ignoreCase = true) }
                     if (!matches) return@filter false
-                    if (!userWantsEnglish && lang.equals("English", ignoreCase = true)) return@filter false
+                    if (!userWantsEnglish && resolvedLang.equals("English", ignoreCase = true)) return@filter false
+                } else if (track.provider == MusicProvider.JIOSAAVN) {
+                    return@filter false
+                }
+            }
+            if (track.genre == Genre.BOLLYWOOD && resolvedLang.equals("English", ignoreCase = true)) {
+                return@filter false
+            }
+            if (track.genre == Genre.DANCE) {
+                val combinedText = "${track.title} ${track.artist} ${track.album.orEmpty()}".lowercase()
+                if (ProviderNormalizer.SAD_OR_SLOW_KEYWORDS.any { combinedText.contains(it) }) {
+                    return@filter false
                 }
             }
             true

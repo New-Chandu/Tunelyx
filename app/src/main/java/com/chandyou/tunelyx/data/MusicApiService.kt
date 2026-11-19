@@ -1,7 +1,6 @@
 ﻿package com.chandyou.tunelyx.data
 
 import androidx.compose.ui.graphics.Color
-import com.chandyou.tunelyx.data.providers.DeezerProvider
 import com.chandyou.tunelyx.data.providers.ITunesProvider
 import com.chandyou.tunelyx.data.providers.JioSaavnProvider
 import com.chandyou.tunelyx.data.providers.ProviderNormalizer
@@ -37,7 +36,6 @@ object MusicApiService {
     ): FetchResult = withContext(Dispatchers.IO) {
         val client = when (provider) {
             MusicProvider.JIOSAAVN -> JioSaavnProvider
-            MusicProvider.DEEZER -> DeezerProvider
             MusicProvider.ITUNES -> ITunesProvider
             MusicProvider.YOUTUBE_MUSIC -> YouTubeMusicProvider
         }
@@ -58,7 +56,6 @@ object MusicApiService {
 
     fun clearAllCaches() {
         JioSaavnProvider.clearQueryCache()
-        DeezerProvider.clearQueryCache()
         ITunesProvider.clearQueryCache()
         YouTubeMusicProvider.clearQueryCache()
     }

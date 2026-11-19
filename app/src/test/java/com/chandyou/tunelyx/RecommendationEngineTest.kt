@@ -3,6 +3,7 @@
 import androidx.compose.ui.graphics.Color
 import com.chandyou.tunelyx.data.ItunesRateLimiter
 import com.chandyou.tunelyx.data.RecommendationEngine
+import com.chandyou.tunelyx.data.TasteProfileCalculator
 import com.chandyou.tunelyx.data.UserPreferencesProvider
 import com.chandyou.tunelyx.data.providers.JioSaavnProvider
 import com.chandyou.tunelyx.data.providers.ProviderNormalizer
@@ -367,16 +368,14 @@ class RecommendationEngineTest {
         assertTrue(saavnHindi.contains(Genre.HIPHOP))
         assertTrue(saavnHindi.contains(Genre.RETRO))
 
-        val deezerHindi = MusicProvider.DEEZER.supportedGenres(hindiSet)
-        assertTrue(deezerHindi.contains(Genre.DANCE))
-        assertTrue(deezerHindi.contains(Genre.HIPHOP))
-        assertFalse(deezerHindi.contains(Genre.RETRO))
-
         val itunesHindi = MusicProvider.ITUNES.supportedGenres(hindiSet)
         assertTrue(itunesHindi.contains(Genre.DANCE))
         assertTrue(itunesHindi.contains(Genre.HIPHOP))
-        assertFalse(itunesHindi.contains(Genre.INDIE))
-        assertFalse(itunesHindi.contains(Genre.RETRO))
+        assertTrue(itunesHindi.contains(Genre.BOLLYWOOD))
+        assertTrue(itunesHindi.contains(Genre.PUNJABI))
+        assertFalse("Apple iTunes does not support Acoustic & Sufi / sad songs specifically", itunesHindi.contains(Genre.ACOUSTIC))
+        assertFalse("Apple iTunes does not support Indie Pop specifically", itunesHindi.contains(Genre.INDIE))
+        assertFalse("Apple iTunes does not support Retro 90s specifically", itunesHindi.contains(Genre.RETRO))
 
         val itunesEnglish = MusicProvider.ITUNES.supportedGenres(englishOnly)
         assertFalse(itunesEnglish.contains(Genre.BOLLYWOOD))
@@ -447,17 +446,17 @@ class RecommendationEngineTest {
     }
 
     @Test
-    fun recommendationEngine_smoothsTasteUpdatesAndAcceptsUnlabeledDeezerTracks() {
+    fun recommendationEngine_smoothsTasteUpdatesAndAcceptsUnlabeledITunesTracks() {
         val affinity = mutableMapOf(Genre.HIPHOP to 50)
-        val track = createSampleTrack(id = "d_1", genre = Genre.HIPHOP, provider = MusicProvider.DEEZER, language = null)
+        val track = createSampleTrack(id = "it_1", genre = Genre.HIPHOP, provider = MusicProvider.ITUNES, language = null)
 
         // Single like should nudge gently (+5 at <60) instead of jumping dramatically
         engine.onTrackInteraction(track, SwipeDirection.LIKE, affinity)
         assertEquals(55, affinity[Genre.HIPHOP])
 
-        // Neutral/unlabeled tracks from Deezer or iTunes pass discovery scoring rather than causing empty deck errors
+        // Neutral/unlabeled tracks from iTunes pass discovery scoring rather than causing empty deck errors
         val score = engine.scoreCandidate(track, emptyMap(), setOf("Hindi"), affinity, emptyList())
-        assertTrue("Deezer track without explicit language tag should remain eligible", score > 0.0)
+        assertTrue("iTunes track without explicit language tag should remain eligible", score > 0.0)
     }
 
     @Test
@@ -543,7 +542,7 @@ class RecommendationEngineTest {
     @Test
     fun fix2_providerDiversityBonus_rewardsUnderrepresentedProviders() {
         val saavnTrack = createSampleTrack(id = "s1", provider = MusicProvider.JIOSAAVN)
-        val deezerTrack = createSampleTrack(id = "d1", provider = MusicProvider.DEEZER)
+        val itunesTrack = createSampleTrack(id = "it1", provider = MusicProvider.ITUNES)
         val ytmTrack = createSampleTrack(id = "y1", provider = MusicProvider.YOUTUBE_MUSIC)
 
         val selectedWithSaavnDominant = listOf(
@@ -555,10 +554,10 @@ class RecommendationEngineTest {
 
         // Run multiple trials to ensure difference holds over jitter (+/- 0.03)
         val saavnScores = (1..20).map { engine.scoreCandidate(saavnTrack, emptyMap(), setOf("Hindi"), defaultGenreMap, selectedWithSaavnDominant) }
-        val deezerScores = (1..20).map { engine.scoreCandidate(deezerTrack, emptyMap(), setOf("Hindi"), defaultGenreMap, selectedWithSaavnDominant) }
+        val itunesScores = (1..20).map { engine.scoreCandidate(itunesTrack, emptyMap(), setOf("Hindi"), defaultGenreMap, selectedWithSaavnDominant) }
         val ytmScores = (1..20).map { engine.scoreCandidate(ytmTrack, emptyMap(), setOf("Hindi"), defaultGenreMap, selectedWithSaavnDominant) }
 
-        assertTrue("Deezer underrepresented provider should score higher on average than dominant JioSaavn", deezerScores.average() > saavnScores.average())
+        assertTrue("iTunes underrepresented provider should score higher on average than dominant JioSaavn", itunesScores.average() > saavnScores.average())
         assertTrue("YouTube Music underrepresented provider should score higher on average than dominant JioSaavn", ytmScores.average() > saavnScores.average())
     }
 
@@ -768,13 +767,156 @@ class RecommendationEngineTest {
     @Test
     fun platformShareUrl_resolvesCorrectPlatformUrls() {
         val ytmTrack = createSampleTrack(id = "yt_abc123", provider = MusicProvider.YOUTUBE_MUSIC)
-        val deezerTrack = createSampleTrack(id = "987654", provider = MusicProvider.DEEZER)
         val itunesTrack = createSampleTrack(id = "it_555", title = "Shape of You", artist = "Ed Sheeran", provider = MusicProvider.ITUNES)
         val jioTrack = createSampleTrack(id = "jio_999", title = "Chaleya", artist = "Arijit Singh", provider = MusicProvider.JIOSAAVN)
 
         assertEquals("https://music.youtube.com/watch?v=abc123", ytmTrack.platformShareUrl())
-        assertEquals("https://www.deezer.com/track/987654", deezerTrack.platformShareUrl())
         assertTrue(itunesTrack.platformShareUrl().startsWith("https://music.apple.com/search?term="))
         assertTrue(jioTrack.platformShareUrl().startsWith("https://www.jiosaavn.com/song/"))
+    }
+
+    @Test
+    fun tasteProfile_computeGenreStats_accuratelyComputesMultiGenrePercentagesAndOrder() {
+        val now = System.currentTimeMillis()
+        val history = listOf(
+            HistoryRecord("p1", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Lover", "Diljit Dosanjh", Genre.PUNJABI),
+            HistoryRecord("p2", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Kinni Kinni", "Diljit Dosanjh", Genre.PUNJABI),
+            HistoryRecord("p3", SwipeDirection.BOOKMARK_INAPP, now, MusicProvider.JIOSAAVN, "Softly", "Karan Aujla", Genre.PUNJABI),
+            HistoryRecord("b1", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Kesariya", "Arijit Singh", Genre.BOLLYWOOD),
+            HistoryRecord("a1", SwipeDirection.BOOKMARK_INAPP, now, MusicProvider.JIOSAAVN, "Kun Faya Kun", "A.R. Rahman", Genre.ACOUSTIC),
+            HistoryRecord("d1", SwipeDirection.DISLIKE, now, MusicProvider.JIOSAAVN, "Random Track", "Artist X", Genre.DANCE)
+        )
+        val affinityMap = mapOf(
+            Genre.PUNJABI to 80,
+            Genre.BOLLYWOOD to 65,
+            Genre.ACOUSTIC to 60,
+            Genre.DANCE to 30
+        )
+
+        val stats = TasteProfileCalculator.computeGenreStats(history, affinityMap)
+
+        // 3 Punjabi affirmative, 1 Bollywood, 1 Acoustic = 5 total affirmative
+        assertEquals(4, stats.size)
+        assertEquals(Genre.PUNJABI, stats[0].genre)
+        assertEquals(3, stats[0].affirmativeCount)
+        assertEquals(60.0f, stats[0].percentage, 0.1f) // 3 / 5 = 60%
+        assertEquals(80, stats[0].affinityScore)
+
+        // Bollywood: 1 / 5 = 20%
+        val bollyStat = stats.first { it.genre == Genre.BOLLYWOOD }
+        assertEquals(1, bollyStat.affirmativeCount)
+        assertEquals(20.0f, bollyStat.percentage, 0.1f)
+
+        // Acoustic: 1 / 5 = 20%
+        val acousticStat = stats.first { it.genre == Genre.ACOUSTIC }
+        assertEquals(1, acousticStat.affirmativeCount)
+        assertEquals(20.0f, acousticStat.percentage, 0.1f)
+
+        // Dance has 0 affirmative, but 1 interaction
+        val danceStat = stats.first { it.genre == Genre.DANCE }
+        assertEquals(0, danceStat.affirmativeCount)
+        assertEquals(1, danceStat.totalInteractions)
+    }
+
+    @Test
+    fun tasteProfile_computeTopArtists_ranksByAffirmations() {
+        val now = System.currentTimeMillis()
+        val history = listOf(
+            HistoryRecord("h1", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song 1", "Diljit Dosanjh", Genre.PUNJABI),
+            HistoryRecord("h2", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song 2", "Diljit Dosanjh", Genre.PUNJABI),
+            HistoryRecord("h3", SwipeDirection.BOOKMARK_INAPP, now, MusicProvider.JIOSAAVN, "Song 3", "Diljit Dosanjh", Genre.PUNJABI),
+            HistoryRecord("h4", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song 4", "Arijit Singh", Genre.BOLLYWOOD),
+            HistoryRecord("h5", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song 5", "Arijit Singh", Genre.BOLLYWOOD),
+            HistoryRecord("h6", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song 6", "Karan Aujla", Genre.PUNJABI)
+        )
+        val saved = listOf(
+            createSampleTrack(id = "s1", artist = "Diljit Dosanjh"),
+            createSampleTrack(id = "s2", artist = "Arijit Singh")
+        )
+
+        val topArtists = TasteProfileCalculator.computeTopArtists(history, saved, limit = 5)
+
+        assertEquals(3, topArtists.size)
+        assertEquals("Diljit Dosanjh", topArtists[0].artistName)
+        assertEquals(3, topArtists[0].likesCount)
+        assertEquals("Arijit Singh", topArtists[1].artistName)
+        assertEquals(2, topArtists[1].likesCount)
+        assertEquals("Karan Aujla", topArtists[2].artistName)
+        assertEquals(1, topArtists[2].likesCount)
+    }
+
+    @Test
+    fun tasteProfile_computeActiveDays_strictlyOmitsGhostDays() {
+        val now = 1731758400000L // Simulated base epoch time
+        val twoDaysAgo = now - (2 * 24 * 60 * 60 * 1000L)
+
+        val history = listOf(
+            HistoryRecord("h1", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song A", "Artist A", Genre.BOLLYWOOD),
+            HistoryRecord("h2", SwipeDirection.DISLIKE, now, MusicProvider.JIOSAAVN, "Song B", "Artist B", Genre.HIPHOP),
+            HistoryRecord("h3", SwipeDirection.LIKE, twoDaysAgo, MusicProvider.JIOSAAVN, "Song C", "Artist C", Genre.PUNJABI)
+        )
+
+        val activeDays = TasteProfileCalculator.computeActiveDays(history, nowMillis = now)
+
+        // Exactly 2 active days, NO ghost days for yesterday or 4 days ago
+        assertEquals(2, activeDays.size)
+        assertEquals("Today", activeDays[0].dateLabel)
+        assertEquals(2, activeDays[0].totalSwipes)
+        assertEquals(1, activeDays[0].savedCount)
+
+        assertFalse("Ghost day for yesterday must not exist", activeDays.any { it.dateLabel == "Yesterday" })
+        assertEquals(1, activeDays[1].totalSwipes)
+        assertEquals(1, activeDays[1].savedCount)
+    }
+
+    @Test
+    fun tasteProfile_computeTasteProfile_integratesAllMetricsAndDampensProgression() {
+        val now = System.currentTimeMillis()
+        val emptyProfile = TasteProfileCalculator.computeTasteProfile(
+            historyRecords = emptyList(),
+            savedTracks = emptyList(),
+            totalSwipesCount = 0,
+            affinityMap = emptyMap()
+        )
+        assertEquals(0, emptyProfile.totalSongsExplored)
+        assertEquals(0, emptyProfile.totalSongsSaved)
+        assertEquals(0, emptyProfile.discoveryRatePercentage)
+        assertTrue(emptyProfile.topGenres.isEmpty())
+        assertTrue(emptyProfile.topArtists.isEmpty())
+        assertTrue(emptyProfile.activeDays.isEmpty())
+
+        val history = listOf(
+            HistoryRecord("h1", SwipeDirection.LIKE, now, MusicProvider.JIOSAAVN, "Song 1", "Artist 1", Genre.PUNJABI),
+            HistoryRecord("h2", SwipeDirection.BOOKMARK_INAPP, now, MusicProvider.JIOSAAVN, "Song 2", "Artist 1", Genre.PUNJABI),
+            HistoryRecord("h3", SwipeDirection.DISLIKE, now, MusicProvider.JIOSAAVN, "Song 3", "Artist 2", Genre.BOLLYWOOD)
+        )
+        val saved = listOf(
+            createSampleTrack(id = "s1", artist = "Artist 1", genre = Genre.PUNJABI),
+            createSampleTrack(id = "s2", artist = "Artist 1", genre = Genre.PUNJABI)
+        )
+
+        val profile = TasteProfileCalculator.computeTasteProfile(
+            historyRecords = history,
+            savedTracks = saved,
+            totalSwipesCount = 3,
+            affinityMap = mapOf(Genre.PUNJABI to 80, Genre.BOLLYWOOD to 45),
+            selectedGenres = setOf(Genre.PUNJABI, Genre.BOLLYWOOD)
+        )
+
+        assertEquals(3, profile.totalSongsExplored)
+        assertEquals(2, profile.totalSongsSaved)
+        assertEquals(66, profile.discoveryRatePercentage) // 2 / 3 = 66%
+        assertTrue(profile.topGenres.isNotEmpty())
+        assertEquals(Genre.PUNJABI, profile.topGenres[0].genre)
+        assertTrue(profile.topArtists.isNotEmpty())
+        assertEquals("Artist 1", profile.topArtists[0].artistName)
+
+        // Trajectories should contain valid bounded scores (10 to 95)
+        assertTrue(profile.trajectories.isNotEmpty())
+        for (traj in profile.trajectories) {
+            for (pt in traj.points) {
+                assertTrue(pt.score in 10..95)
+            }
+        }
     }
 }

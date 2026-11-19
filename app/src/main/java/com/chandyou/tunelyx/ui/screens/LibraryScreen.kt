@@ -2,12 +2,10 @@
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -18,6 +16,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -52,6 +52,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
@@ -91,15 +92,21 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.chandyou.tunelyx.model.Genre
@@ -117,7 +124,7 @@ import kotlin.math.roundToInt
 enum class LibraryTab(val title: String) {
     LIKED("Liked"),
     BOOKMARKS("Bookmarks"),
-    COOLDOWN("Cooldown"),
+    COOLDOWN("Skipped"),
     DISLIKED("Disliked")
 }
 
@@ -131,8 +138,10 @@ fun LibraryScreen(
     var selectedPlatformFilter by remember { mutableStateOf<MusicProvider?>(null) }
     var showPlatformMenu by remember { mutableStateOf(false) }
 
-    val history by viewModel.history.collectAsState()
+    val likedTracks by viewModel.libraryLiked.collectAsState()
     val inAppSaved by viewModel.inAppSaved.collectAsState()
+    val cooldownTracks by viewModel.libraryCooldown.collectAsState()
+    val dislikedTracks by viewModel.libraryDisliked.collectAsState()
     val playingTrack by viewModel.audioEngine.currentTrack.collectAsState()
     val isPlaying by viewModel.audioEngine.isPlaying.collectAsState()
     val canUndoRemoval by viewModel.canUndoLibraryRemoval.collectAsState()
@@ -140,41 +149,23 @@ fun LibraryScreen(
 
     var searchQuery by remember { mutableStateOf("") }
 
-    // Offload active-tab track mapping, sorting & filtering off the Main Thread so switching to Library/sub-tabs stays 0-lag
-    val activeTabTracks by produceState<List<Track>>(
-        initialValue = emptyList(),
-        selectedTab, history, inAppSaved, selectedPlatformFilter, searchQuery
-    ) {
-        value = withContext(Dispatchers.Default) {
-            val baseList = when (selectedTab) {
-                LibraryTab.LIKED -> history.values
-                    .filter { it.action == SwipeDirection.LIKE || it.action == SwipeDirection.BOOKMARK_INAPP }
-                    .sortedByDescending { it.timestamp }
-                    .map { it.toTrack() }
-                LibraryTab.BOOKMARKS -> inAppSaved
-                LibraryTab.COOLDOWN -> {
-                    val now = System.currentTimeMillis()
-                    val sevenDaysMs = 7 * 24 * 60 * 60 * 1000L
-                    history.values
-                        .filter { it.action == SwipeDirection.SKIP_NEUTRAL && (now - it.timestamp) < sevenDaysMs }
-                        .sortedByDescending { it.timestamp }
-                        .map { it.toTrack() }
-                }
-                LibraryTab.DISLIKED -> history.values
-                    .filter { it.action == SwipeDirection.DISLIKE }
-                    .sortedByDescending { it.timestamp }
-                    .map { it.toTrack() }
-            }
-            if (selectedPlatformFilter == null && searchQuery.isBlank()) {
-                baseList
-            } else {
-                baseList.filter { track ->
-                    val matchesPlatform = selectedPlatformFilter == null || track.provider == selectedPlatformFilter
-                    val matchesSearch = searchQuery.isBlank() ||
-                        track.title.contains(searchQuery, ignoreCase = true) ||
-                        track.artist.contains(searchQuery, ignoreCase = true)
-                    matchesPlatform && matchesSearch
-                }
+    // Instant O(1) tab list resolution from pre-sorted background StateFlows
+    val activeTabTracks = remember(selectedTab, likedTracks, inAppSaved, cooldownTracks, dislikedTracks, selectedPlatformFilter, searchQuery) {
+        val baseList = when (selectedTab) {
+            LibraryTab.LIKED -> likedTracks
+            LibraryTab.BOOKMARKS -> inAppSaved
+            LibraryTab.COOLDOWN -> cooldownTracks
+            LibraryTab.DISLIKED -> dislikedTracks
+        }
+        if (selectedPlatformFilter == null && searchQuery.isBlank()) {
+            baseList
+        } else {
+            baseList.filter { track ->
+                val matchesPlatform = selectedPlatformFilter == null || track.provider == selectedPlatformFilter
+                val matchesSearch = searchQuery.isBlank() ||
+                    track.title.contains(searchQuery, ignoreCase = true) ||
+                    track.artist.contains(searchQuery, ignoreCase = true)
+                matchesPlatform && matchesSearch
             }
         }
     }
@@ -189,7 +180,7 @@ fun LibraryScreen(
     Box(modifier = modifier.fillMaxSize()) {
         val listBottomPadding = when {
             isImmersiveDockEnabled -> if (playingTrack != null || viewModel.currentTrack != null) 156.dp else 98.dp
-            playingTrack != null -> 170.dp
+            playingTrack != null -> 164.dp
             else -> 98.dp
         }
         Column(
@@ -197,7 +188,6 @@ fun LibraryScreen(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
                 .padding(top = 10.dp)
-                .padding(bottom = listBottomPadding)
         ) {
             // Real-Time Search Filter Bar with Platform Dropdown Button (matching Image 2)
             Row(
@@ -264,7 +254,7 @@ fun LibraryScreen(
                             .clip(RoundedCornerShape(12.dp))
                             .background(if (selectedPlatformFilter != null) colors.accentGreen else colors.bgSurfaceElevated)
                             .border(1.dp, if (selectedPlatformFilter != null) colors.accentGreen else colors.borderSubtle, RoundedCornerShape(12.dp))
-                            .clickable { showPlatformMenu = true }
+                            .clickable { showPlatformMenu = !showPlatformMenu }
                             .padding(horizontal = 10.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -283,98 +273,175 @@ fun LibraryScreen(
                         )
                     }
 
-                    DropdownMenu(
-                        expanded = showPlatformMenu,
-                        onDismissRequest = { showPlatformMenu = false },
-                        modifier = Modifier.background(colors.bgSurfaceElevated)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("All Platforms", color = colors.textPrimary, fontSize = 13.sp) },
-                            onClick = {
-                                selectedPlatformFilter = null
-                                showPlatformMenu = false
-                            }
-                        )
-                        MusicProvider.entries.forEach { provider ->
-                            DropdownMenuItem(
-                                text = { Text(provider.displayName, color = colors.textPrimary, fontSize = 13.sp) },
-                                onClick = {
-                                    selectedPlatformFilter = provider
-                                    showPlatformMenu = false
+                    // Decoupled Minimal Platform Selector Popup: does not alter parent layout bounds or crush search bar
+                    if (showPlatformMenu) {
+                        Popup(
+                            alignment = Alignment.TopEnd,
+                            offset = with(LocalDensity.current) { IntOffset(0, 42.dp.roundToPx()) },
+                            onDismissRequest = { showPlatformMenu = false },
+                            properties = PopupProperties(focusable = true)
+                        ) {
+                            var isPopupVisible by remember { mutableStateOf(false) }
+                            LaunchedEffect(Unit) { isPopupVisible = true }
+
+                            val popupScale by animateFloatAsState(
+                                targetValue = if (isPopupVisible) 1.0f else 0.85f,
+                                animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
+                                label = "popupScale"
+                            )
+                            val popupAlpha by animateFloatAsState(
+                                targetValue = if (isPopupVisible) 1.0f else 0.0f,
+                                animationSpec = tween(140),
+                                label = "popupAlpha"
+                            )
+
+                            Column(
+                                modifier = Modifier
+                                    .width(184.dp)
+                                    .graphicsLayer {
+                                        scaleX = popupScale
+                                        scaleY = popupScale
+                                        alpha = popupAlpha
+                                        transformOrigin = TransformOrigin(1f, 0f)
+                                    }
+                                    .shadow(
+                                        elevation = if (colors.isDark) 16.dp else 10.dp,
+                                        shape = RoundedCornerShape(16.dp),
+                                        spotColor = Color(0x38000000)
+                                    )
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(if (colors.isDark) Color(0xFF161920) else Color(0xFFFFFFFF))
+                                    .border(
+                                        width = 1.dp,
+                                        color = colors.borderSubtle.copy(alpha = if (colors.isDark) 0.55f else 0.75f),
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    .padding(vertical = 5.dp)
+                            ) {
+                                val options: List<MusicProvider?> = listOf(null) + MusicProvider.entries
+                                options.forEach { provider ->
+                                    val isSelected = selectedPlatformFilter == provider
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                selectedPlatformFilter = provider
+                                                showPlatformMenu = false
+                                            }
+                                            .background(if (isSelected) colors.accentGreen.copy(alpha = 0.12f) else Color.Transparent)
+                                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = provider?.displayName ?: "All Platforms",
+                                            fontSize = 12.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) colors.accentGreen else colors.textPrimary
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Selected",
+                                                tint = colors.accentGreen,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                    }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Filter Tabs Row (Minimal dot-separated typography with active pill matching Discover screen)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LibraryTab.entries.forEachIndexed { index, tab ->
+                    if (index > 0) {
+                        // Subtle dot separator design between items
+                        Box(
+                            modifier = Modifier
+                                .size(3.5.dp)
+                                .clip(CircleShape)
+                                .background(colors.textTertiary.copy(alpha = 0.40f))
+                        )
+                    }
+
+                    val isSelected = tab == selectedTab
+                    val tabInteractionSource = remember { MutableInteractionSource() }
+                    val isTabPressed by tabInteractionSource.collectIsPressedAsState()
+
+                    val tabScale by animateFloatAsState(
+                        targetValue = if (isTabPressed) 0.94f else 1.0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        ),
+                        label = "tabScale"
+                    )
+
+                    if (isSelected) {
+                        // Clean minimal solid pill ONLY for the currently selected tab
+                        Box(
+                            modifier = Modifier
+                                .scale(tabScale)
+                                .clip(CircleShape)
+                                .background(if (colors.isDark) Color(0xFFF1F5F9) else Color(0xFF0F172A))
+                                .clickable(
+                                    interactionSource = tabInteractionSource,
+                                    indication = null
+                                ) { selectedTab = tab }
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = tab.title,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (colors.isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+                            )
+                        }
+                    } else {
+                        // Clean borderless muted text for inactive tabs
+                        Box(
+                            modifier = Modifier
+                                .scale(tabScale)
+                                .clickable(
+                                    interactionSource = tabInteractionSource,
+                                    indication = null
+                                ) { selectedTab = tab }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = tab.title,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.textSecondary.copy(alpha = 0.70f)
                             )
                         }
                     }
                 }
             }
 
-        // Filter Tabs Row
-        LazyRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(LibraryTab.entries) { tab ->
-                val isSelected = tab == selectedTab
-
-                val bgColor by animateColorAsState(
-                    targetValue = if (isSelected) colors.accentGreen else colors.bgGlass,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
-                    label = "tabBg"
-                )
-                val textColor by animateColorAsState(
-                    targetValue = if (isSelected) colors.onAccent else colors.textSecondary,
-                    label = "tabText"
-                )
-                val borderColor by animateColorAsState(
-                    targetValue = if (isSelected) colors.accentGreen else colors.borderSubtle,
-                    label = "tabBorder"
-                )
-
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(bgColor)
-                        .border(
-                            width = 1.dp,
-                            color = borderColor,
-                            shape = CircleShape
-                        )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { selectedTab = tab }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = tab.title,
-                        fontSize = 13.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = textColor
-                    )
-                }
-            }
-        }
-
-        // Lightweight crossfade with paged lazy loading (25 items per page) to keep tab switching silky smooth
-        AnimatedContent(
-            targetState = selectedTab,
-            transitionSpec = {
-                fadeIn(animationSpec = tween(160, easing = LinearOutSlowInEasing)) togetherWith
-                    fadeOut(animationSpec = tween(120))
-            },
-            label = "libraryContent"
-        ) { tab ->
-            val trackList = if (tab == selectedTab) activeTabTracks else emptyList()
+        // Instant tab content rendering without crossfade
+        val tab = selectedTab
+        val trackList = activeTabTracks
 
             if (trackList.isEmpty()) {
                 val hasActiveFilter = selectedPlatformFilter != null || searchQuery.isNotBlank()
                 val emptyMessage = when (tab) {
                     LibraryTab.LIKED -> if (!hasActiveFilter) "No liked songs." else "No liked songs match active filters."
                     LibraryTab.BOOKMARKS -> if (!hasActiveFilter) "No bookmarked songs." else "No bookmarks match active filters."
-                    LibraryTab.COOLDOWN -> if (!hasActiveFilter) "No cooldown songs." else "No cooldown songs match active filters."
+                    LibraryTab.COOLDOWN -> if (!hasActiveFilter) "No skipped songs." else "No skipped songs match active filters."
                     LibraryTab.DISLIKED -> if (!hasActiveFilter) "No disliked songs." else "No disliked songs match active filters."
                 }
 
@@ -393,92 +460,63 @@ fun LibraryScreen(
                 }
             } else {
                 val listState = rememberLazyListState()
-                var visibleLimit by remember(tab, selectedPlatformFilter, searchQuery) { mutableIntStateOf(25) }
-                val pagedTracks = remember(trackList, visibleLimit) { trackList.take(visibleLimit) }
-
-                LaunchedEffect(listState, trackList.size) {
-                    snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
-                        .collect { lastVisible ->
-                            if (visibleLimit < trackList.size && lastVisible >= (visibleLimit - 6)) {
-                                visibleLimit = (visibleLimit + 25).coerceAtMost(trackList.size)
-                            }
-                        }
-                }
 
                 LazyColumn(
                     state = listState,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = listBottomPadding),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    // Use stable item key per tab+trackId so removing/undoing updates ONLY that row without refreshing the whole list
-                    itemsIndexed(pagedTracks, key = { _, it -> "${tab.name}_${it.id}" }) { index, track ->
+                    // True lazy loading: LazyColumn composes and renders only items currently visible on viewport
+                    itemsIndexed(trackList, key = { _, it -> "${tab.name}_${it.id}" }) { index, track ->
                         val isCurrentPlaying = playingTrack?.id == track.id && isPlaying
-                        var maxDragFraction by remember(track.id) { androidx.compose.runtime.mutableFloatStateOf(0f) }
 
+                        @Suppress("DEPRECATION")
                         @OptIn(ExperimentalMaterial3Api::class)
                         val dismissState = rememberSwipeToDismissBoxState(
-                            positionalThreshold = { totalDistance -> totalDistance * 0.62f }
+                            confirmValueChange = { targetValue ->
+                                if (targetValue == SwipeToDismissBoxValue.StartToEnd || targetValue == SwipeToDismissBoxValue.EndToStart) {
+                                    viewModel.removeTrackFromLibrary(track)
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                            positionalThreshold = { totalDistance -> totalDistance * 0.75f }
                         )
 
-                        // Reset settled state cleanly when an undone item returns with the same stable key
-                        LaunchedEffect(track.id) {
-                            maxDragFraction = 0f
-                            if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
-                                dismissState.snapTo(SwipeToDismissBoxValue.Settled)
-                            }
-                        }
-
-                        LaunchedEffect(dismissState.progress, dismissState.targetValue) {
-                            if (dismissState.targetValue != SwipeToDismissBoxValue.Settled) {
-                                maxDragFraction = maxOf(maxDragFraction, dismissState.progress)
-                            } else if (dismissState.currentValue == SwipeToDismissBoxValue.Settled) {
-                                maxDragFraction = 0f
-                            }
-                        }
-
-                        // Reject short-distance accidental scroll flicks; only delete on deliberate horizontal swipe
-                        LaunchedEffect(dismissState.currentValue) {
-                            if (dismissState.currentValue == SwipeToDismissBoxValue.StartToEnd ||
-                                dismissState.currentValue == SwipeToDismissBoxValue.EndToStart
-                            ) {
-                                if (maxDragFraction >= 0.42f) {
-                                    maxDragFraction = 0f
-                                    viewModel.removeTrackFromLibrary(track)
-                                } else {
-                                    maxDragFraction = 0f
-                                    dismissState.snapTo(SwipeToDismissBoxValue.Settled)
-                                }
-                            }
-                        }
-
-                        Column(modifier = Modifier.animateItem()) {
+                        Column {
                             @OptIn(ExperimentalMaterial3Api::class)
                             SwipeToDismissBox(
                                 state = dismissState,
                                 backgroundContent = {
-                                    val color by animateColorAsState(
-                                        targetValue = when (dismissState.targetValue) {
-                                            SwipeToDismissBoxValue.Settled -> Color.Transparent
-                                            else -> colors.accentRed.copy(alpha = 0.85f)
-                                        },
-                                        label = "dismissColor"
-                                    )
-                                    val alignment = when (dismissState.targetValue) {
-                                        SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
-                                        else -> Alignment.CenterEnd
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(color)
-                                            .padding(horizontal = 20.dp),
-                                        contentAlignment = alignment
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Delete,
-                                            contentDescription = "Remove",
-                                            tint = Color.White
+                                    val isDismissing = dismissState.targetValue != SwipeToDismissBoxValue.Settled ||
+                                        dismissState.currentValue != SwipeToDismissBoxValue.Settled
+                                    if (isDismissing) {
+                                        val color by animateColorAsState(
+                                            targetValue = when (dismissState.targetValue) {
+                                                SwipeToDismissBoxValue.Settled -> Color.Transparent
+                                                else -> colors.accentRed.copy(alpha = 0.85f)
+                                            },
+                                            label = "dismissColor"
                                         )
+                                        val alignment = when (dismissState.targetValue) {
+                                            SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                                            else -> Alignment.CenterEnd
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(color)
+                                                .padding(horizontal = 20.dp),
+                                            contentAlignment = alignment
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Remove",
+                                                tint = Color.White
+                                            )
+                                        }
                                     }
                                 },
                                 content = {
@@ -500,7 +538,7 @@ fun LibraryScreen(
                             )
 
                             // Subtle divider between list items matching real music app styling
-                            if (index < pagedTracks.lastIndex) {
+                            if (index < trackList.lastIndex) {
                                 HorizontalDivider(
                                     color = colors.borderSubtle.copy(alpha = if (colors.isDark) 0.35f else 0.50f),
                                     thickness = 0.6.dp,
@@ -512,7 +550,6 @@ fun LibraryScreen(
                 }
             }
         }
-    }
 
     // Floating Undo Removal Bar with Horizontal Swipe-to-Dismiss
     AnimatedVisibility(
@@ -579,104 +616,6 @@ fun LibraryScreen(
                     .clickable { viewModel.undoRemoveFromLibrary() }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             )
-        }
-    }
-
-    // Floating In-App Mini Preview Player Bar for Library Auditioning (hidden when Immersive Dock handles Library mini-player)
-    AnimatedVisibility(
-        visible = !isImmersiveDockEnabled && playingTrack != null,
-        enter = fadeIn(spring()) + slideInVertically(initialOffsetY = { it }),
-        exit = fadeOut(tween(160)) + slideOutVertically(targetOffsetY = { it }),
-        modifier = Modifier
-            .align(Alignment.BottomCenter)
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 98.dp)
-    ) {
-        playingTrack?.let { track ->
-            val playInteractionSource = remember { MutableInteractionSource() }
-            val isPlayPressed by playInteractionSource.collectIsPressedAsState()
-            val playScale by animateFloatAsState(
-                targetValue = if (isPlayPressed) 0.88f else 1.0f,
-                animationSpec = spring(),
-                label = "playScale"
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = 12.dp, shape = RoundedCornerShape(16.dp), spotColor = Color(0x33000000))
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(colors.cardBg)
-                    .border(
-                        1.dp,
-                        Color(0x33888888),
-                        RoundedCornerShape(16.dp)
-                    )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsyncImage(
-                    model = track.artworkUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = track.title,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "${track.displayArtists().joinToString(", ")} • ${if (isPlaying) "Previewing" else "Paused"}",
-                        fontSize = 11.sp,
-                        color = if (isPlaying) colors.accentGreen else colors.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .scale(playScale)
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(colors.accentGreen)
-                        .clickable(
-                            interactionSource = playInteractionSource,
-                            indication = null
-                        ) { viewModel.audioEngine.togglePlayPause() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = colors.onAccent,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .clickable { viewModel.audioEngine.stop() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Stop",
-                        tint = colors.textSecondary,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-            }
         }
     }
     }
