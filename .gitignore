@@ -7,9 +7,20 @@
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/shelf
+/.idea/deploymentTargetDropDown.xml
+/.idea/deploymentTargetSelector.xml
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 /build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin & Compiler artifacts
+.kotlin
+*.log
+*.hprof
